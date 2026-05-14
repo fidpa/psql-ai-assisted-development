@@ -1,0 +1,437 @@
+#!/opt/homebrew/bin/bash
+# psql-order_processing: DIATAXIS Link Validation Orchestrator
+# Validiert alle 5 DIATAXIS-Areas (tutorial, how-to, reference, explanation, entry-points)
+# Version: 1.0.0
+# Erstellt: 13. November 2025
+# Autor: Marc Allgeier
+#
+# Changelog v1.0.1 (17.11.2025):
+# - ✅ Batch 6 Optimizations (Variable quoting, error handling improvements)
+#
+# Changelog v1.0.0 (13.11.2025):
+# - ✅ Initial Release für Ubuntu Server
+# - ✅ Validiert alle 6 DIATAXIS-Areas parallel oder sequential
+# - ✅ Aggregierte Statistiken (Total Broken Links, Total Files)
+# - ✅ Farbiger Summary-Report mit Exit Code
+# - ✅ Ubuntu SCRIPTING_GUIDELINES compliant (set -uo pipefail, logging.sh)
+#
+# Features:
+# - Validiert 6 DIATAXIS-Areas: tutorial/, how-to/, reference/, explanation/, entry-points/, dashboard/
+# - Parallel-Unterstützung (-j N Flag für parallele Jobs pro Area)
+# - Aggregierte Statistiken über alle Areas
+# - Farbiger Summary-Report
+# - Exit Code: 0=Alles OK, 1=Mindestens 1 Area mit Broken Links
+#
+# Usage:
+#   validate-all-areas.sh [OPTIONS]
+#
+# OPTIONS:
+#   -j N, --parallel-jobs=N Führe N parallele Jobs pro Area aus (default: 1)
+#   -v, --verbose           Zeige detaillierte Ausgabe für alle Links
+#   --no-color              Deaktiviere farbige Ausgabe
+#   -h, --help              Zeige diese Hilfe
+#
+# EXIT CODES:
+#   0 - Alle Links in allen Areas valide
+#   1 - Mindestens 1 Area hat broken links
+#   2 - Script-Fehler
+#
+# EXAMPLES:
+#   validate-all-areas.sh           # Sequential validation (alle Areas)
+#   validate-all-areas.sh -j 4       # Parallel (4 jobs pro Area)
+#   validate-all-areas.sh --verbose  # Detaillierte Ausgabe
+
+set -uo pipefail  # NO -e: Explizites Error Handling (Ubuntu Guidelines)
+
+# ============================================================================
+# VERSION & METADATA (DRY Pattern)
+# ============================================================================
+
+readonly VERSION="1.0.0"
+SCRIPT_NAME="$(basename "$0" .sh)"
+readonly SCRIPT_NAME
+# NOTE: Using _SCRIPT_PATH to avoid readonly conflict with logging.sh
+_SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
+readonly _SCRIPT_PATH
+SCRIPT_DIR="$(dirname "$_SCRIPT_PATH")"
+readonly SCRIPT_DIR
+
+# Resolve project root (dynamically from script location - one level up from scripts/)
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+readonly PROJECT_ROOT
+
+# ============================================================================
+# CLEANUP TRAP (Defensive Programming)
+# ============================================================================
+
+cleanup() {
+    # Defensive cleanup - currently no temp files created
+    # Future-proof: Add cleanup tasks here if needed
+    :
+}
+trap cleanup EXIT SIGINT SIGTERM
+
+# ============================================================================
+# LOGGING INTEGRATION (Ubuntu Guidelines)
+# ============================================================================
+
+# Try to load logging.sh (optional, graceful fallback to echo)
+LOGGING_LIB="${PROJECT_ROOT}/lib/logging.sh"
+if [[ -f "$LOGGING_LIB" ]]; then
+    # Disable performance logging for this script
+    export LOG_PERFORMANCE=false
+    # shellcheck source=/dev/null
+    source "$LOGGING_LIB" || {
+        echo "WARNING: Failed to load logging.sh, using fallback" >&2
+    }
+    USE_LOGGING=true
+else
+    USE_LOGGING=false
+fi
+
+# Fallback logging functions (if logging.sh not available)
+if [[ "$USE_LOGGING" != "true" ]]; then
+    log_info() { echo "[INFO] $*"; }
+    log_warn() { echo "[WARN] $*" >&2; }
+    log_error() { echo "[ERROR] $*" >&2; }
+fi
+
+# ============================================================================
+# CONFIGURATION
+# ============================================================================
+
+# Docs directory
+readonly DOCS_DIR="${PROJECT_ROOT}/docs"
+# Note: Validators are called directly from area directories (no central validator script)
+
+# DIATAXIS Areas to validate (in order)
+readonly AREAS=(
+    "tutorial"
+    "how-to"
+    "reference"
+    "explanation"
+    "entry-points"
+)
+
+# Options (können via Environment überschrieben werden)
+: "${VERBOSE:=false}"
+: "${COLOR_OUTPUT:=true}"
+: "${PARALLEL_JOBS:=1}"
+
+# ============================================================================
+# COLOR CODES (TTY Detection)
+# ============================================================================
+
+setup_colors() {
+    if [[ $COLOR_OUTPUT == true ]] && [[ -t 1 ]]; then
+        readonly GREEN='\033[0;32m'
+        readonly RED='\033[0;31m'
+        readonly YELLOW='\033[1;33m'
+        readonly BLUE='\033[0;34m'
+        readonly CYAN='\033[0;36m'
+        readonly BOLD='\033[1m'
+        readonly NC='\033[0m'
+    else
+        readonly GREEN="" RED="" YELLOW="" BLUE="" CYAN="" BOLD="" NC=""
+    fi
+}
+
+# ============================================================================
+# GLOBAL COUNTERS
+# ============================================================================
+
+declare -i total_areas=0
+declare -i successful_areas=0
+declare -i failed_areas=0
+declare -i total_files=0
+declare -i total_links=0
+declare -i total_broken=0
+declare -i total_warnings=0
+
+# Start time for duration calculation
+START_TIME=$(date +%s)
+readonly START_TIME
+
+# ============================================================================
+# FUNCTIONS
+# ============================================================================
+
+show_usage() {
+    cat <<EOF
+Usage: $0 [OPTIONS]
+
+Validiert alle 5 DIATAXIS-Areas (tutorial, how-to, reference, explanation, entry-points).
+
+OPTIONS:
+    -j N, --parallel-jobs=N Führe N parallele Jobs pro Area aus (default: 1)
+    -v, --verbose           Zeige detaillierte Ausgabe für alle Links
+    --no-color              Deaktiviere farbige Ausgabe
+    -h, --help              Zeige diese Hilfe
+    --version               Zeige Version
+
+EXIT CODES:
+    0 - Alle Links in allen Areas valide
+    1 - Mindestens 1 Area hat broken links
+    2 - Script-Fehler
+
+EXAMPLES:
+    $0                # Sequential validation (alle Areas)
+    $0 -j 4           # Parallel (4 jobs pro Area)
+    $0 --verbose      # Detaillierte Ausgabe
+
+DIATAXIS AREAS:
+    - tutorial/       Lern-orientierte Guides
+    - how-to/         Problem-orientierte Guides
+    - reference/      Informations-orientierte Referenzen
+    - explanation/    Versteh-orientierte Explanations
+    - entry-points/   Navigations-Hubs
+
+VERSION: $VERSION
+
+EOF
+}
+
+show_version() {
+    echo "$SCRIPT_NAME v$VERSION"
+}
+
+# Validate a single area
+# Returns: 0=success, 1=broken links found, 2=error
+validate_area() {
+    local area="$1"
+    local area_index="$2"
+    local area_dir="${DOCS_DIR}/${area}"
+
+    # Check if area exists
+    if [[ ! -d "$area_dir" ]]; then
+        log_warn "Area not found: $area_dir (skipping)"
+        return 2
+    fi
+
+    echo ""
+    echo -e "${BOLD}[AREA $area_index/${#AREAS[@]}] $area/${NC}"
+
+    # Count files in area (for statistics)
+    local file_count
+    file_count=$(find "$area_dir" -name "*.md" -type f 2>/dev/null | grep -v "/archive/" | wc -l)
+
+    # Build validator command (call wrapper script in area directory)
+    local validator_cmd=("${area_dir}/validate-links.sh")
+
+    # Add flags
+    if [[ $VERBOSE == true ]]; then
+        validator_cmd+=(--verbose)
+    fi
+
+    if [[ $COLOR_OUTPUT != true ]]; then
+        validator_cmd+=(--no-color)
+    fi
+
+    if [[ $PARALLEL_JOBS -gt 1 ]]; then
+        validator_cmd+=(-j "$PARALLEL_JOBS")
+    fi
+
+    # Run validator and capture output + exit code
+    local validator_output
+    local validator_exit=0
+    validator_output=$("${validator_cmd[@]}" 2>&1) || validator_exit=$?
+
+    # Parse statistics from output
+    local area_files=0
+    local area_links=0
+    local area_broken=0
+    local area_warnings=0
+
+    if [[ "$validator_output" =~ "Total files scanned: "([0-9]+) ]]; then
+        area_files="${BASH_REMATCH[1]}"
+    fi
+
+    if [[ "$validator_output" =~ "Total links found: "([0-9]+) ]]; then
+        area_links="${BASH_REMATCH[1]}"
+    fi
+
+    if [[ "$validator_output" =~ "Broken links: "([0-9]+) ]]; then
+        area_broken="${BASH_REMATCH[1]}"
+    fi
+
+    if [[ "$validator_output" =~ "Warnings: "([0-9]+) ]]; then
+        area_warnings="${BASH_REMATCH[1]}"
+    fi
+
+    # Update global counters
+    total_files=$((total_files + area_files))
+    total_links=$((total_links + area_links))
+    total_broken=$((total_broken + area_broken))
+    total_warnings=$((total_warnings + area_warnings))
+
+    # Show result
+    if [[ $validator_exit -eq 0 ]]; then
+        if [[ $area_warnings -gt 0 ]]; then
+            echo -e "  ${YELLOW}⚠${NC}  $area_links links, $area_warnings warnings ($file_count files)"
+        else
+            echo -e "  ${GREEN}✓${NC}  $area_links links OK, 0 broken ($file_count files)"
+        fi
+        successful_areas=$((successful_areas + 1))
+        return 0
+    elif [[ $validator_exit -eq 1 ]]; then
+        echo -e "  ${RED}✗${NC}  $area_links links, $area_broken broken ($file_count files)"
+        failed_areas=$((failed_areas + 1))
+
+        # Show broken link details (only if not verbose, verbose already shows everything)
+        if [[ $VERBOSE != true ]]; then
+            echo "$validator_output" | grep -E "(❌|⚠️)" | head -10
+            local broken_count
+            broken_count=$(echo "$validator_output" | grep -c "❌" || true)
+            if [[ $broken_count -gt 10 ]]; then
+                echo -e "  ${CYAN}ℹ${NC}  ... and $((broken_count - 10)) more broken links (use --verbose for full output)"
+            fi
+        fi
+
+        return 1
+    else
+        log_error "Validator failed for $area (exit code: $validator_exit)"
+        failed_areas=$((failed_areas + 1))
+        return 2
+    fi
+}
+
+# ============================================================================
+# MAIN
+# ============================================================================
+
+main() {
+    # Parse command line arguments
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -v|--verbose)
+                VERBOSE=true
+                export VERBOSE  # Export for validator
+                shift
+                ;;
+            --no-color)
+                COLOR_OUTPUT=false
+                export COLOR_OUTPUT  # Export for validator
+                shift
+                ;;
+            -j)
+                if [[ -z "${2:-}" ]]; then
+                    log_error "-j requires a positive integer"
+                    return 2
+                fi
+                PARALLEL_JOBS="$2"
+                if ! [[ "$PARALLEL_JOBS" =~ ^[0-9]+$ ]] || [[ $PARALLEL_JOBS -lt 1 ]]; then
+                    log_error "-j requires a positive integer"
+                    return 2
+                fi
+                shift 2
+                ;;
+            --parallel-jobs=*)
+                PARALLEL_JOBS="${1#*=}"
+                if ! [[ "$PARALLEL_JOBS" =~ ^[0-9]+$ ]] || [[ $PARALLEL_JOBS -lt 1 ]]; then
+                    log_error "--parallel-jobs requires a positive integer"
+                    return 2
+                fi
+                shift
+                ;;
+            --version)
+                show_version
+                return 0
+                ;;
+            -h|--help)
+                show_usage
+                return 0
+                ;;
+            *)
+                log_error "Unknown option: $1"
+                echo "Use -h or --help for usage information" >&2
+                return 2
+                ;;
+        esac
+    done
+
+    # Setup colors
+    setup_colors
+
+    # Header
+    echo -e "${BOLD}${BLUE}============================================="
+    echo -e " DIATAXIS Link Validation Report"
+    echo -e "=============================================${NC}"
+    echo -e "Docs directory: $DOCS_DIR"
+    echo -e "Areas: ${#AREAS[@]} (${AREAS[*]})"
+    if [[ $PARALLEL_JOBS -gt 1 ]]; then
+        echo -e "Parallel jobs: $PARALLEL_JOBS per area"
+    else
+        echo -e "Mode: Sequential"
+    fi
+
+    # Validate each area
+    total_areas=${#AREAS[@]}
+    local area_index=0
+    for area in "${AREAS[@]}"; do
+        area_index=$((area_index + 1))
+
+        # Explicit error handling (NO set -e)
+        validate_area "$area" "$area_index" || true
+    done
+
+    # Calculate duration
+    local end_time
+    end_time=$(date +%s)
+    local duration=$((end_time - START_TIME))
+
+    # ============================================================================
+    # SUMMARY REPORT
+    # ============================================================================
+
+    echo ""
+    echo -e "${BOLD}${BLUE}============================================="
+    echo -e " Summary"
+    echo -e "=============================================${NC}"
+
+    echo -e "${BOLD}Areas:${NC}"
+    echo -e "  Total:      $total_areas"
+    echo -e "  Success:    $successful_areas"
+    echo -e "  Failed:     $failed_areas"
+
+    echo ""
+    echo -e "${BOLD}Files & Links:${NC}"
+    echo -e "  Files:      $total_files"
+    echo -e "  Links:      $total_links"
+    echo -e "  Broken:     $total_broken"
+    echo -e "  Warnings:   $total_warnings"
+
+    # Calculate success rate
+    if [[ $total_links -gt 0 ]]; then
+        local valid_links=$((total_links - total_broken))
+        local success_rate=$(( (valid_links * 100) / total_links ))
+        echo -e "  Success:    ${success_rate}%"
+    fi
+
+    echo ""
+    echo -e "${BOLD}Duration:${NC} ${duration}s"
+    echo ""
+
+    # Final status
+    if [[ $total_broken -eq 0 ]]; then
+        if [[ $total_warnings -gt 0 ]]; then
+            echo -e "${YELLOW}⚠️  All links valid, but $total_warnings warnings found${NC}"
+            return 0
+        else
+            echo -e "${GREEN}✅ All links validated successfully!${NC}"
+            return 0
+        fi
+    else
+        echo -e "${RED}❌ Found $total_broken broken links across $failed_areas areas${NC}"
+        echo ""
+        echo -e "${CYAN}TIP:${NC} Run with --verbose to see all broken links"
+        echo -e "${CYAN}TIP:${NC} Run orchestrator: scripts/validate-all-areas.sh --verbose"
+        echo -e "${CYAN}TIP:${NC} Run individual area: cd ${DOCS_DIR}/<area> && ./validate-links.sh"
+        return 1
+    fi
+}
+
+# Run main function only if script is executed directly (not sourced)
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+    exit $?
+fi

@@ -1,0 +1,55 @@
+# Secrets & env
+*.env
+!*.example.env
+.env.local
+.env.secrets
+.pgpass
+*.key
+*.pem
+
+# PostgreSQL artifacts
+*.dump
+*.backup
+*.sql.gz
+*.tar.zst
+pg_log/
+pgdata/
+
+# Build / test outputs
+*.tmp
+*.log
+test-output/
+coverage/
+.coverage
+.coverage-html/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary
+/tmp/
+*.bak
+*.orig
+
+# Personal / marketing content (not for upstream)
+REDDIT_POST.md
+LINKEDIN_POST.md
+NOTES.local.md
+
+# Internal anonymisation tooling (do not publish)
+scripts/_internal/
+
+# Nextcloud / rclone symlinks
+*.rclonelink
+
+# Claude Code local overrides
+.claude/settings.local.json
+.claude/.cache/

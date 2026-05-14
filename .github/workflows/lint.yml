@@ -1,0 +1,82 @@
+name: Lint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  shellcheck:
+    name: ShellCheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run ShellCheck on scripts/
+        run: |
+          if compgen -G "scripts/*.sh" > /dev/null; then
+            find scripts -name "*.sh" -not -path "*/_internal/*" -print0 \
+              | xargs -0 shellcheck --severity=error
+          else
+            echo "No shell scripts to lint yet."
+          fi
+
+  sql-lint:
+    name: SQLFluff
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install sqlfluff
+        run: pip install sqlfluff==3.2.5
+      - name: Lint SQL
+        run: |
+          if compgen -G "sql/**/*.sql" > /dev/null 2>&1 || find sql -name "*.sql" -print -quit | grep -q .; then
+            sqlfluff lint --dialect postgres sql/
+          else
+            echo "No SQL files to lint yet."
+          fi
+
+  markdown-lint:
+    name: Markdown Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install markdownlint-cli
+        run: npm install -g markdownlint-cli@0.42.0
+      - name: Lint Markdown
+        run: |
+          markdownlint --disable MD013 MD024 MD033 MD034 MD041 -- \
+            README.md CHANGELOG.md CONTRIBUTING.md SECURITY.md CODE_OF_CONDUCT.md \
+            'docs/**/*.md' || true
+
+  anonymisation-sweep:
+    name: Anonymisation Guardrail
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Scan for forbidden source-domain terms
+        run: |
+          set -euo pipefail
+          # The forbidden-term list is stored base64-encoded so that the source
+          # vocabulary itself does not appear in this public file. Anyone with
+          # the encoded blob can reconstruct the list with `base64 -d`; the goal
+          # is not secrecy but to prevent casual reverse-engineering by readers
+          # who browse the workflow file.
+          FORBIDDEN_B64='cmV6ZXB0fGJlaGFuZGxlcnxwYXRpZW50fGtyYW5rZW5rYXNzZXxrYXNzZW5yZWNobnVuZ3xsZWlzdHVuZ3N0eXB8dmVyamFlaHJ1bmd8dmVyaijDpHxhZSlocnR8ZXJmYXNzdW5nfHNjYW5uZW58c29ydGllcihlbnxrYXRlZ29yaWUpfGF0aGVyYXxhcm5pLT8yODAyMjR8cGc4OTY1NzN8a3VuZGVubGFuZGthcnRlbnxwcmF4aXNzb2Z0d2FyZXxhcG90aGVrZXxkYXR1bWVpbmdhbmd8ZGF0dW1yZWNobnVuZ2RydWNrZW58a3VuZGVubnJ8aGVpbG1pdHRlbHxnZXN1bmRoZWl0c3dlc2VufGdrdnxwa3Z8c2difHZlcm9yZG51bmd8dm9ybmFtZXxuYWNobmFtZXxiZWhhbmRsdW5ncz9kYXR1bXx0ZXJtaW5pZHxwcmF4aXN8aGlsZnNtaXR0ZWx8a3JhbmtlbnRyYW5zcG9ydHxmYWhyZGllbnN0fHNlbnRpbmVsZXh0ZXJufHJ1ZWNrbGF1ZmVyfGdlbG9lc2NodHxiaWxsaW5nZGVwYXJ0bWVudA=='
+          FORBIDDEN=$(echo "${FORBIDDEN_B64}" | base64 -d)
+          # Excludes: .git, this workflow file (which carries the encoded blob)
+          if grep -REni \
+              --exclude-dir=.git \
+              --exclude=lint.yml \
+              "${FORBIDDEN}" . ; then
+            echo ""
+            echo "::error::Anonymisation guardrail tripped — see matches above."
+            exit 1
+          fi
+          echo "Anonymisation sweep passed."

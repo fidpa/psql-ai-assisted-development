@@ -1,0 +1,24 @@
+[sqlfluff]
+dialect = postgres
+max_line_length = 200
+
+# This project follows a compact, business-readable view style that conflicts
+# with several sqlfluff default rule groups. We disable entire groups rather
+# than rewriting domain-driven SQL to fit a linter:
+#
+#   aliasing       - views use short positional aliases (FROM vw_kpi_a a)
+#                    rather than the mandatory AS form
+#   capitalisation - user functions are lowercase (fn_easter_sunday, MAKE_DATE)
+#                    while built-ins stay UPPERCASE; this is intentional and
+#                    is also how the file headers document migration patterns
+#   layout         - line length, indentation, blank-line and single-target
+#                    rules conflict with the multi-CTE composition style
+#                    (see vw_kpi_dashboard for the canonical example)
+#   references     - "label", "type", and similar domain columns sometimes
+#                    overlap with reserved words; accepted by design
+#   structure      - "ELSE NULL" is kept explicit for readability; SELECT
+#                    column order in views follows business semantics, not
+#                    lint-imposed wildcard-first grouping
+#
+# Parsing errors, ambiguity warnings and convention checks remain active.
+exclude_rules = aliasing,capitalisation,layout,references,structure

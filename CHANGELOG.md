@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-05-14
+
+Documentation audit pass against Anthropic's CLAUDE.md best-practices (memory + best-practices guidance). Scope: `CLAUDE.md` only.
+
+### Changed
+
+- `CLAUDE.md` slimmed from 207 to 191 lines (below the 200-line guidance threshold) and de-duplicated against the *First-stop documents* and *Thematic entry points* sections.
+- Operational-script invocations in `CLAUDE.md` rewritten as `bash scripts/...` (the shipped scripts do not have the executable bit, so `./scripts/...` would fail with `Permission denied`).
+- Source-table availability clarified: `sql/schemas/01_schema.sql` creates only the `order_processing` namespace; source-table DDL (`order_doc`, `order_line`, `appointment`, …) is not shipped with the public release.
+
+### Fixed
+
+- Removed the `@./docs/imports/QUICK_REF.md` import, which injected pre-migration content (Windows `psql.exe`, non-existent `vw_PowerBI_*` layer, "SQL Server Express (aktuell)") into every AI session and contradicted the rest of the briefing.
+- KPI sanity-check SQL example in `CLAUDE.md` is now copy-paste runnable (`<EXPECTED_VALUE>` placeholder replaced by a typed literal with an explanatory comment).
+- `tables/` directory comment in `CLAUDE.md` correctly labels `fact_expiry_mat` as `MATERIALIZED VIEW` and notes that the trend-history table identifier is `kpi_historie` (the file is `kpi_history.sql`).
+- Auto-processing routing rule in `CLAUDE.md` matches the codebase pattern: `COALESCE(source_system_id, 0) > 0` (not `IS NOT NULL`).
+- Retention-window description in `CLAUDE.md` reflects that `INTERVAL '180 days'` appears at six call sites in `vw_fact_expiry_calculation.sql`, not a single constant.
+
 ## [0.1.0] - 2026-05-14
 
 Initial public release.
@@ -27,4 +45,5 @@ Initial public release.
 - `sql/procedures/` is intentionally empty — refresh and health-check procedures were considered too environment-specific to generalise. See [`sql/procedures/README.md`](sql/procedures/README.md) for portable re-implementation hints.
 - The retention window is parameterised (default 180 days), not a domain-specific deadline.
 
+[0.1.1]: https://github.com/fidpa/psql-ai-assisted-development/releases/tag/v0.1.1
 [0.1.0]: https://github.com/fidpa/psql-ai-assisted-development/releases/tag/v0.1.0

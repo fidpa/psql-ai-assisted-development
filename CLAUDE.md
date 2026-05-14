@@ -1,15 +1,9 @@
-@./docs/imports/QUICK_REF.md
-
 # CLAUDE.md — AI Assistant Briefing
 
 This file is the system prompt for [Claude Code](https://www.claude.com/product/claude-code)
 and any other AI assistant working inside this repository. Read it before
 making changes — it is intentionally short and points at the documents that
 hold the actual detail.
-
-> **Action**: Use this document as a directive, not as an introduction.
-> **Goal**: Effective PostgreSQL + Power BI work without re-deriving
-> conventions on every session.
 
 ## 🎯 First-stop documents
 
@@ -63,13 +57,13 @@ psql -h localhost -U postgres -f sql/schemas/01_schema.sql
 
 ```bash
 # pg_dumpall-based backup with retention
-./scripts/backup-postgres.sh
+bash scripts/backup-postgres.sh
 
 # Cache-hit-ratio and pg_stat_statements snapshot
-./scripts/monitor-postgres-performance.sh
+bash scripts/monitor-postgres-performance.sh
 
 # Cross-area validation (schema + functions + views)
-./scripts/validate-all-areas.sh
+bash scripts/validate-all-areas.sh
 ```
 
 ### View development workflow
@@ -83,11 +77,12 @@ psql -h localhost -U postgres -f sql/schemas/01_schema.sql
 -- 3. Add a file header with: purpose, dependencies, and any SQL-Server-to-
 --    PostgreSQL migration notes (see existing files for the template).
 
--- KPI sanity check against an expected value:
+-- KPI sanity check against an expected value
+-- (replace the literal with the value from docs/explanation/PROJEKT_ARCHITEKTUR.md):
 SELECT
     'e1_last_working_day' AS kpi,
     (SELECT e1_last_working_day FROM vw_kpi_dashboard_gesamt) AS calculated,
-    <EXPECTED_VALUE> AS expected;
+    0::INTEGER AS expected;
 ```
 
 ## 📁 Directory layout
@@ -99,7 +94,8 @@ sql/
 ├── views/02_fact/# facts (vw_fact_*)
 ├── views/03_kpi/ # KPI aggregations (vw_kpi_*)
 ├── functions/    # PL/pgSQL helpers (fn_easter_sunday, fn_working_days_between)
-├── tables/       # materialised tables (fact_expiry_mat, kpi_history)
+├── tables/       # fact_expiry_mat (MATERIALIZED VIEW),
+│                 # kpi_historie (regular table; file: kpi_history.sql)
 ├── procedures/   # stub — not shipped, see sql/procedures/README.md
 └── migrations/   # versioned migration scripts (placeholder)
 
@@ -110,6 +106,12 @@ docs/             # Diátaxis-structured documentation (German)
 
 Convention: `.sql` is PostgreSQL. Any `.sqlserver.sql` siblings (where they
 exist) are kept for historical reference only — do not run them.
+
+Note: `sql/schemas/01_schema.sql` creates only the `order_processing`
+namespace. The source-table DDL referenced below (`order_doc`, `order_line`,
+`appointment`, `provider`, `customer`, `counterparty`, `invoice_insurer`,
+`service_type`) is **not shipped** with the public release; point the views
+at your own equivalent schema.
 
 ## 🏗️ View hierarchy (bottom-up)
 
@@ -140,11 +142,14 @@ business rationale for each KPI is in
 1. **Partner tier**: `provider_group_id IN (1, 2)` separates tier-A (internal)
    from tier-B (external) providers.
 2. **Auto-processing routing**: an order is auto-classified when
-   `service_type_id IN (10, 20, 30, 40)` AND `source_system_id IS NOT NULL`
-   AND `import_type IN (1, 2)`.
-3. **Retention window**: 180 days after the last reference event. Configured
-   by literal in [`sql/views/02_fact/vw_fact_expiry_calculation.sql`](sql/views/02_fact/vw_fact_expiry_calculation.sql) —
-   change one value, the rest follows.
+   `service_type_id IN (10, 20, 30, 40)` AND
+   `COALESCE(source_system_id, 0) > 0` AND `import_type IN (1, 2)`.
+   The `COALESCE` form is the established pattern across `vw_dim_provider`
+   and the `vw_kpi_order_sorting*` views — do not rewrite it as `IS NOT NULL`.
+3. **Retention window**: 180 days after the last reference event. Encoded
+   as `INTERVAL '180 days'` in
+   [`sql/views/02_fact/vw_fact_expiry_calculation.sql`](sql/views/02_fact/vw_fact_expiry_calculation.sql)
+   at six call sites — change them together (no single constant exists).
 4. **Working days**: Monday–Friday minus the German national holiday set
    (movable holidays via [`fn_easter_sunday`](sql/functions/fn_easter_sunday.sql)).
 
@@ -174,33 +179,12 @@ business rationale for each KPI is in
 
 ## 📚 Documentation map (Diátaxis)
 
-**🎓 Tutorial (learn step by step):**
-- [PostgreSQL Migration Guide](docs/tutorial/POSTGRESQL_MIGRATION_GUIDE.md) — 3-week plan
-- [PostgreSQL Migration Technical](docs/tutorial/POSTGRESQL_MIGRATION_TECHNISCH.md) — schema conversion
-- [SSH Setup Mac → Windows](docs/tutorial/SSH_SETUP_MAC_WINDOWS.md)
+Items not already covered under *First-stop documents* or *Thematic entry points*:
 
-**🔧 How-to (solve a task):**
-- [Daily Ops](docs/how-to/POSTGRESQL_DAILY_OPS.md)
-- [Automation](docs/how-to/POSTGRESQL_AUTOMATION.md)
-- [Troubleshooting](docs/how-to/TROUBLESHOOTING_DATENBANK.md)
-- [Power BI Dashboard Development](docs/how-to/POWER_BI_DASHBOARD_ENTWICKLUNG.md)
-- [Task Tracking](docs/how-to/TASK_TRACKING.md)
-- [Session Workflow](docs/how-to/SESSION_WORKFLOW.md)
-- [Claude Code Automation](docs/how-to/CLAUDE_CODE_AUTOMATION.md)
-
-**📖 Reference (look up):**
-- [PostgreSQL Reference](docs/reference/POSTGRESQL_REFERENZ.md)
-- [SQL Server Legacy](docs/reference/SQL_SERVER_LEGACY.md)
-- [Power BI DAX Catalogue](docs/reference/POWER_BI_DAX_KATALOG.md)
-- [Postgres Tuning](docs/reference/POSTGRES_TUNING.md)
-- [Claude Code Conventions](docs/reference/CLAUDE_CODE_KONVENTIONEN.md)
-- [Quick Reference](docs/reference/QUICK_REF.md) — KPI definitions cheat sheet
-
-**💡 Explanation (understand why):**
-- [Project Architecture](docs/explanation/PROJEKT_ARCHITEKTUR.md) — system design and business logic
-- [Strategic Vision](docs/explanation/STRATEGISCHE_VISION.md)
-- [Migration Strategy](docs/explanation/MIGRATION_STRATEGIE.md)
-- [Remote Management Architecture](docs/explanation/REMOTE_MANAGEMENT_ARCHITEKTUR.md)
+- **🎓 Tutorial**: [Migration Guide (3-week plan)](docs/tutorial/POSTGRESQL_MIGRATION_GUIDE.md) · [Migration Technical](docs/tutorial/POSTGRESQL_MIGRATION_TECHNISCH.md) · [SSH Setup Mac → Windows](docs/tutorial/SSH_SETUP_MAC_WINDOWS.md)
+- **🔧 How-to**: [Automation](docs/how-to/POSTGRESQL_AUTOMATION.md) · [Task Tracking](docs/how-to/TASK_TRACKING.md) · [Session Workflow](docs/how-to/SESSION_WORKFLOW.md) · [Claude Code Automation](docs/how-to/CLAUDE_CODE_AUTOMATION.md)
+- **📖 Reference**: [Power BI DAX Catalogue](docs/reference/POWER_BI_DAX_KATALOG.md) · [Postgres Tuning](docs/reference/POSTGRES_TUNING.md) · [Claude Code Conventions](docs/reference/CLAUDE_CODE_KONVENTIONEN.md) · [Quick Reference (KPI cheat sheet)](docs/reference/QUICK_REF.md)
+- **💡 Explanation**: [Strategic Vision](docs/explanation/STRATEGISCHE_VISION.md) · [Migration Strategy](docs/explanation/MIGRATION_STRATEGIE.md) · [Remote Management Architecture](docs/explanation/REMOTE_MANAGEMENT_ARCHITEKTUR.md)
 
 ---
 

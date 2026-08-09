@@ -12,14 +12,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Run ShellCheck on scripts/
+      - name: Run ShellCheck
         run: |
-          if compgen -G "scripts/*.sh" > /dev/null; then
-            find scripts -name "*.sh" -not -path "*/_internal/*" -print0 \
-              | xargs -0 shellcheck --severity=error
-          else
-            echo "No shell scripts to lint yet."
-          fi
+          # lib/, tests/ and the per-area validators under docs/ are covered too;
+          # lib/validate-links-core.sh is vendored from bash-markdown-link-validator
+          # and is linted by its own repository.
+          find scripts lib tests docs -name "*.sh" \
+              -not -path "*/_internal/*" \
+              -not -name "validate-links-core.sh" -print0 \
+            | xargs -0 -r shellcheck --severity=error
+
+  lib-tests:
+    name: Library Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run the library and link-validator test suite
+        run: bash tests/run-lib-tests.sh
 
   sql-lint:
     name: SQLFluff

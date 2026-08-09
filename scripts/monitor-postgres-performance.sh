@@ -19,9 +19,10 @@
 #          PostgreSQL)
 # System:  legacy-host Linux server (Ubuntu 24.04 LTS, 64 GB RAM, PostgreSQL 16)
 #
-# REQUIREMENT: this script sources a shared shell library that is NOT shipped
-# with the public release (see the guard below and the README). Without it the
-# script exits 2 and does nothing.
+# REQUIREMENT: this script sources the shared shell library in lib/, which ships
+# with the repository since v0.2.0. Point PG_TOOLKIT_LIB_DIR at your own
+# implementation to replace it. If the library cannot be found the script exits 2
+# and does nothing rather than failing halfway through.
 
 set -uo pipefail  # NO -e: explicit error handling
 
@@ -32,21 +33,19 @@ LOG_TAG="$(basename "$0" .sh)"
 # shellcheck disable=SC2034  # read by the sourced logging library
 readonly LOG_TAG
 
-# Shared shell library. NOT shipped with the public release — it was too tied
-# to the original server layout to generalise. Supply your own implementation
-# of the functions listed below, or point PG_TOOLKIT_LIB_DIR at a directory
-# that contains them.
+# Shared shell library, shipped in lib/ since v0.2.0. Set PG_TOOLKIT_LIB_DIR to
+# use your own implementation of the functions listed below instead.
 LIB_DIR="${PG_TOOLKIT_LIB_DIR:-${SCRIPT_DIR}/../lib}"
 readonly LIB_DIR
 for _lib in logging.sh utils.sh secure-file-utils.sh; do
     if [[ ! -r "${LIB_DIR}/${_lib}" ]]; then
         echo "ERROR: required library not found: ${LIB_DIR}/${_lib}" >&2
         echo "" >&2
-        echo "This script depends on a shared shell library that is not shipped" >&2
-        echo "with the public release. Provide your own implementation of:" >&2
+        echo "This script depends on the shared shell library in lib/." >&2
+        echo "Expected there, or in PG_TOOLKIT_LIB_DIR, providing:" >&2
         echo "  log_info, log_warning, log_success, log_error," >&2
         echo "  send_alert_once, check_postgresql," >&2
-        echo "  format_metrics_table_html, sfu_append_file" >&2
+        echo "  format_metrics_table_html, redact_sensitive_data, sfu_append_file" >&2
         echo "or set PG_TOOLKIT_LIB_DIR to a directory that contains them." >&2
         exit 2
     fi
@@ -65,7 +64,7 @@ unset _lib
 
 # Configuration - All readonly
 readonly LOG_PREFIX="[Performance Monitor]"
-readonly METRICS_LOG="/var/log/performance-metrics.log"
+readonly METRICS_LOG="${PERF_METRICS_LOG:-/var/log/performance-metrics.log}"
 readonly ALERT_ON_HIGH_LOAD="${PERF_ALERT_HIGH_LOAD:-true}"
 
 # Thresholds - All readonly
@@ -145,7 +144,7 @@ main() {
                 "Docker Containers|${container_count} running|OK")
 
             local top_cpu_consumers
-            top_cpu_consumers=$(ps aux --sort=-%cpu | head -11 | tail -10 | awk '{printf "%-20s %6s\n", $11, $3"%"}')
+            top_cpu_consumers=$(redact_sensitive_data "$(ps aux --sort=-%cpu | head -11 | tail -10 | awk '{printf "%-20s %6s\n", $11, $3"%"}')")
 
             send_alert_once "perf_high_cpu" "$ALERT_COOLDOWN" \
                 "[Performance] High CPU Load" \
@@ -162,7 +161,7 @@ Cores:  $cpu_cores</pre>
 <strong>Top CPU Consumers (Top 10):</strong>
 <pre>PROCESS              CPU%
 $top_cpu_consumers</pre>" \
-                "" \
+                "${ALERT_EMAIL:-root@localhost}" \
                 "1. Check top processes: <code>top -b -n 1 | head -20</code>
 2. Identify CPU hogs: <code>ps aux --sort=-%cpu | head -15</code>
 3. Check for runaway processes: <code>systemctl list-units --failed</code>
@@ -175,8 +174,7 @@ $top_cpu_consumers</pre>" \
 ⚠️  Service slowdown expected
 ℹ️  Normal spikes: backups (03:00), VS Code builds, cron jobs
 ℹ️  Sustained >85%: Investigation required" \
-                "<repo>/docs/operations/CPU_TUNING.md" \
-                "${ALERT_EMAIL:-root@localhost}"
+                "<repo>/docs/operations/CPU_TUNING.md"
         fi
     fi
 
@@ -218,9 +216,9 @@ $top_cpu_consumers</pre>" \
                 "Swap Used|$(free -m | grep Swap | awk '{print $3}')MB|OK")
 
             local mem_detail
-            mem_detail=$(free -h)
+            mem_detail=$(redact_sensitive_data "$(free -h)")
             local top_mem_consumers
-            top_mem_consumers=$(ps aux --sort=-%mem | head -11 | tail -10 | awk '{printf "%-20s %6s %8s\n", $11, $4"%", $6}')
+            top_mem_consumers=$(redact_sensitive_data "$(ps aux --sort=-%mem | head -11 | tail -10 | awk '{printf "%-20s %6s %8s\n", $11, $4"%", $6}')")
 
             send_alert_once "perf_high_memory" "$ALERT_COOLDOWN" \
                 "[Performance] High Memory Usage" \
@@ -234,7 +232,7 @@ $top_cpu_consumers</pre>" \
 <strong>Top Memory Consumers (Top 10):</strong>
 <pre>PROCESS              MEM%     VSZ
 $top_mem_consumers</pre>" \
-                "" \
+                "${ALERT_EMAIL:-root@localhost}" \
                 "1. Check memory usage: <code>free -h</code>
 2. Identify memory hogs: <code>ps aux --sort=-%mem | head -15</code>
 3. Check for memory leaks: <code>systemctl status postgresql</code>
@@ -246,8 +244,7 @@ $top_mem_consumers</pre>" \
 ⚠️  OOM killer may terminate processes at >95%
 ⚠️  Service crashes possible
 ℹ️  Normal usage: 50-80% with 64GB RAM" \
-                "<repo>/docs/operations/MEMORY_TUNING.md" \
-                "${ALERT_EMAIL:-root@localhost}"
+                "<repo>/docs/operations/MEMORY_TUNING.md"
         fi
     fi
 
@@ -274,11 +271,15 @@ $top_mem_consumers</pre>" \
     fi
 
     # === 4. RAID Performance ===
-    if [ -e "/proc/mdstat" ]; then
+    # An existing /proc/mdstat proves nothing — the file is present on virtually
+    # every Linux, array or not. Only an array line does.
+    if grep -qE '^md[0-9]+[[:space:]]*:' /proc/mdstat 2>/dev/null; then
         local raid_status
         raid_status=$(grep -E "active|UU|U_|_U" /proc/mdstat | head -1)
         log_info "$LOG_PREFIX RAID Status: $raid_status"
         metrics+="RAID_STATUS=\"$raid_status\" "
+    else
+        log_info "$LOG_PREFIX RAID: no md array configured"
     fi
 
     # === 5. PostgreSQL Performance ===
@@ -316,10 +317,19 @@ $top_mem_consumers</pre>" \
     log_info "$LOG_PREFIX Collecting Docker container metrics..."
 
     if systemctl is-active --quiet docker; then
+        # NOTE: `cmd || echo fallback` is wrong here. When the container does
+        # not exist, docker inspect prints an empty line to stdout AND exits
+        # non-zero, so the fallback is appended to that line and the value
+        # becomes a two-line string — which then breaks the single-line metrics
+        # record. Capture first, substitute afterwards.
         local webapp_status
-        webapp_status=$(docker inspect -f '{{.State.Status}}' webapp 2>/dev/null || echo "not_found")
+        webapp_status=$(docker inspect -f '{{.State.Status}}' webapp 2>/dev/null)
+        webapp_status="${webapp_status//[$'\n'$'\r']/}"
+        [[ -z "$webapp_status" ]] && webapp_status="not_found"
         local webapp_uptime
-        webapp_uptime=$(docker inspect -f '{{.State.StartedAt}}' webapp 2>/dev/null || echo "N/A")
+        webapp_uptime=$(docker inspect -f '{{.State.StartedAt}}' webapp 2>/dev/null)
+        webapp_uptime="${webapp_uptime//[$'\n'$'\r']/}"
+        [[ -z "$webapp_uptime" ]] && webapp_uptime="N/A"
 
         log_info "$LOG_PREFIX Docker: WebApp status: $webapp_status (started: $webapp_uptime)"
 

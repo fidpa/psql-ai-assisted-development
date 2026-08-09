@@ -18,6 +18,10 @@ pgdata/
 # Build / test outputs
 *.tmp
 *.log
+# …except the test fixtures, which are input, not output. Without this the
+# suite passes locally (the file is present but untracked) and fails in CI on a
+# fresh checkout — the worst kind of difference between the two.
+!tests/fixtures/*.log
 test-output/
 coverage/
 .coverage

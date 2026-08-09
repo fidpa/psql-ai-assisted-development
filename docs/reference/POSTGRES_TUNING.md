@@ -715,7 +715,7 @@ sudo -u postgres psql -c "CREATE EXTENSION IF NOT EXISTS pg_stat_statements;"
 
 ## Related Documentation
 
-- **[Part 1 — Configuration](#part-1--configuration)** - Memory Configuration, Authentication, Advanced Settings (top of this file)
+- **[Part 1 — Configuration](#part-1--configuration-reference)** - Memory Configuration, Authentication, Advanced Settings (top of this file)
 - **[`POSTGRESQL_REFERENZ.md`](POSTGRESQL_REFERENZ.md)** - PostgreSQL Overview, Setup, Data Types
 - **[`scripts/backup-postgres.sh`](../../scripts/backup-postgres.sh)** - PostgreSQL Backup Script (companion implementation)
 - **[`scripts/monitor-postgres-performance.sh`](../../scripts/monitor-postgres-performance.sh)** - Performance Monitor Script

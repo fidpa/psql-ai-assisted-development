@@ -62,11 +62,13 @@ bash scripts/backup-postgres.sh
 # Cache-hit-ratio and pg_stat_statements snapshot
 bash scripts/monitor-postgres-performance.sh
 
-# Documentation link validation across the five Diátaxis areas.
-# Orchestrator only: it calls docs/<area>/validate-links.sh, and those per-area
-# validators are NOT shipped with the public release. Without them the script
-# exits 2 with an explicit message — it does not report a false success.
+# Documentation link validation across the five Diátaxis areas (371 links in
+# 44 files, anchors included). Run this after touching any documentation link
+# or heading — a heading rename silently breaks every anchor pointing at it.
 bash scripts/validate-all-areas.sh
+
+# Library and validator test suite. No PostgreSQL, no root, no MTA required.
+bash tests/run-lib-tests.sh
 
 # Deploy the SQL bundle (prompts for confirmation, resolves deploy.sql
 # relative to the script, so any working directory works)
@@ -108,7 +110,13 @@ sql/
 
 config/           # postgresql.conf overrides for a 64 GB host
 scripts/          # backup, performance monitor, validation, deploy helpers
+lib/              # shared shell library sourced by scripts/ (logging, alerting,
+                  # health checks, redaction) + vendored link-validator core.
+                  # Read lib/README.md before changing anything here: the
+                  # calling scripts impose five hard rules on it.
+tests/            # run-lib-tests.sh + fixtures; runs as a normal user
 docs/             # Diátaxis-structured documentation (German)
+                  # each area carries its own validate-links.sh
 ```
 
 Convention: `.sql` is PostgreSQL. Any `.sqlserver.sql` siblings (where they

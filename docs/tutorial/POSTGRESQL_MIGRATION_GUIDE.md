@@ -68,7 +68,7 @@ gantt
 - [ ] User & Permissions Setup
 - [ ] Monitoring-Tools Installation
 
-**Technische Umsetzung**: [PostgreSQL-Referenz - Setup & Configuration](../reference/POSTGRESQL_REFERENZ.md#postgresql-setup)
+**Technische Umsetzung**: [PostgreSQL-Referenz - Setup & Configuration](../reference/POSTGRESQL_REFERENZ.md#postgresql-setup--configuration)
 
 ### Tag 3-4: Sync-Mechanismus etablieren
 **Verantwortlich**: KI-Assistant automatisiert

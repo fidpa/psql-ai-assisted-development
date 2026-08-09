@@ -29,10 +29,13 @@ The source domain has been replaced with a generic document-processing / order-t
   tuned for a 64 GB NVMe host, with a [deployment guide](docs/reference/POSTGRES_TUNING.md)
   and verification queries.
 - **Operational scripts**: [`pg_dumpall`-based backup with retention](scripts/backup-postgres.sh),
-  and a [cache-hit-ratio / `pg_stat_statements` performance monitor](scripts/monitor-postgres-performance.sh).
-  Read [*Operational scripts: what is and is not shipped*](#operational-scripts-what-is-and-is-not-shipped)
-  before running either — they are reference implementations with an external
-  dependency, not turn-key tools.
+  a [cache-hit-ratio / `pg_stat_statements` performance monitor](scripts/monitor-postgres-performance.sh),
+  and the [shared shell library](lib/) behind them — logging, cooldown-deduplicated
+  alerting, RAID and PostgreSQL health checks, credential redaction. See
+  [*Operational scripts*](#operational-scripts) for what each one needs to run.
+- **Documentation link validation**: [`validate-all-areas.sh`](scripts/validate-all-areas.sh)
+  checks all 371 links across the 44 documentation files, including anchors, and
+  fails the build on a broken one.
 - **Diátaxis documentation**: tutorial / how-to / reference / explanation —
   four entry points for four kinds of reader.
 - **Claude Code workflow blueprint**: a [`CLAUDE.md`](CLAUDE.md) that doubles
@@ -201,49 +204,63 @@ verification queries for a 64 GB NVMe host.
 
 ---
 
-## Operational scripts: what is and is not shipped
+## Operational scripts
 
-The same rule that applies to the source tables applies to
-[`scripts/`](scripts/): what is published is the **logic**, not a turn-key
-installation. Three of the four scripts depend on components of the original
-server that were too environment-specific to generalise. Each one now says so
-on standard error and exits non-zero, instead of failing halfway through or —
-worse — reporting a success it did not earn.
+Since v0.2.0 the components these scripts depend on ship with the repository:
+the shared shell library in [`lib/`](lib/) and the per-area documentation link
+validators. What each script still needs is its actual runtime environment — a
+running PostgreSQL, root privileges, a writable backup directory. That is
+stated per script rather than papered over.
 
-| Script | Runs as shipped? | External dependency |
-|--------|------------------|---------------------|
-| [`deploy.sh`](scripts/deploy.sh) | **yes** | `psql` on `PATH` |
-| [`backup-postgres.sh`](scripts/backup-postgres.sh) | no — exits 2 | shared shell library (`logging.sh`, `utils.sh`) |
-| [`monitor-postgres-performance.sh`](scripts/monitor-postgres-performance.sh) | no — exits 2 | shared shell library (`logging.sh`, `utils.sh`, `secure-file-utils.sh`) |
-| [`validate-all-areas.sh`](scripts/validate-all-areas.sh) | no — exits 2 | a per-area validator at `docs/<area>/validate-links.sh` |
+| Script | Runs on a fresh clone? | Still requires |
+|--------|------------------------|----------------|
+| [`deploy.sh`](scripts/deploy.sh) | **yes** | `psql` on `PATH`, a reachable database |
+| [`validate-all-areas.sh`](scripts/validate-all-areas.sh) | **yes** | nothing |
+| [`monitor-postgres-performance.sh`](scripts/monitor-postgres-performance.sh) | **yes** | a writable metrics log (`PERF_METRICS_LOG`); PostgreSQL metrics need a reachable server and `PG_MONITORING_PASSWORD` |
+| [`backup-postgres.sh`](scripts/backup-postgres.sh) | partly | root, `pg_dumpall`, `zstd`, a writable `/postgresql/backups` |
 
-**The shared shell library** must provide, across both scripts: `log_info`,
-`log_warning`, `log_success`, `log_error`, `send_alert`, `send_alert_once`,
-`check_postgresql`, `check_raid_status`, `format_metrics_table_html`,
-`redact_sensitive_data` and `sfu_append_file`. Each script names the subset it
-needs in its own error message. Point `PG_TOOLKIT_LIB_DIR` at your own
-implementation:
+Try them without touching anything system-wide:
+
+```bash
+bash scripts/validate-all-areas.sh                       # validates all 371 doc links
+PERF_METRICS_LOG=/tmp/metrics.log \
+  bash scripts/monitor-postgres-performance.sh           # writes one metrics record
+bash tests/run-lib-tests.sh                              # the library test suite
+```
+
+**Replacing the library.** Point `PG_TOOLKIT_LIB_DIR` at your own implementation
+of the functions listed in [`lib/README.md`](lib/README.md), which also documents
+the five rules a replacement has to observe (`return 0` at the end of each file,
+no assignments to the callers' readonly names, no traps, and so on):
 
 ```bash
 PG_TOOLKIT_LIB_DIR=/opt/mytools/lib bash scripts/backup-postgres.sh
 ```
 
-`send_alert_once` is expected to deduplicate by key within a cooldown window —
-the callers pass a key and a cooldown in seconds.
+**Alert delivery** goes to stderr and to `alerts.log` in the state directory
+first, and only then to an MTA (`sendmail -t`, else `mail -s`). If no MTA is
+available the scripts say so once instead of losing the alert. `send_alert_once`
+deduplicates by key within a cooldown window; the stamps live next to that log.
 
-**Environment variables** read by the scripts:
+**Environment variables** read by the scripts (the library adds more — see
+[`lib/README.md`](lib/README.md)):
 
 | Variable | Default | Used by |
 |----------|---------|---------|
 | `PG_TOOLKIT_LIB_DIR` | `scripts/../lib` | backup, monitor |
+| `PG_TOOLKIT_STATE_DIR` | `/var/lib/pg-toolkit` as root, else `$XDG_STATE_HOME`/`$HOME/.local/state` | backup, monitor |
 | `PG_MONITORING_PASSWORD` | *(empty)* | monitor — password for the read-only `monitoring` role |
+| `PERF_METRICS_LOG` | `/var/log/performance-metrics.log` | monitor |
 | `PERF_ALERT_HIGH_LOAD` | `true` | monitor |
-| `ALERT_EMAIL` | `root@localhost` | backup, monitor |
+| `BACKUP_LOG` | `/var/log/postgresql-backup.log` | backup |
 | `BACKUP_SUCCESS_NOTIFICATION` | `false` | backup |
+| `ALERT_EMAIL` | `root@localhost` | backup, monitor |
 
-**The per-area link validator** is described in the requirement block at the
-top of [`validate-all-areas.sh`](scripts/validate-all-areas.sh), including the
-four aggregate lines the orchestrator parses.
+**The documentation link validators** live at `docs/<area>/validate-links.sh`,
+one per Diátaxis area, driven by
+[`scripts/validate-all-areas.sh`](scripts/validate-all-areas.sh). The work is
+done by [`lib/validate-links-core.sh`](lib/validate-links-core.sh), vendored from
+[bash-markdown-link-validator](https://github.com/fidpa/bash-markdown-link-validator).
 
 ---
 
@@ -265,6 +282,8 @@ four aggregate lines the orchestrator parses.
 | [`sql/tables/`](sql/tables/) | … see the materialised expiry table pattern |
 | [`config/`](config/) | … grab a tuned `postgresql.conf` for a 64 GB host |
 | [`scripts/`](scripts/) | … deploy, validate, back up, monitor |
+| [`lib/`](lib/) | … see the shared shell library and the contract it fulfils |
+| [`tests/`](tests/) | … run the library test suite without PostgreSQL or root |
 
 ---
 

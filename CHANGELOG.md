@@ -5,6 +5,66 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-08-09
+
+The missing components now ship. v0.1.2 made three of the four operational scripts honest about the fact that they could not run — they exited 2 and named the component they were missing. This release supplies those components: the shared shell library in `lib/` and the per-area documentation link validators. All four scripts now work on a fresh clone, with a test suite that verifies them without PostgreSQL, root, an MTA or a RAID array.
+
+### Added
+
+#### `lib/` — the shared shell library (690 lines across three files)
+
+- **`lib/logging.sh`** — `log_info`, `log_success`, `log_warning`, `log_error`, the `log_warn` alias that `validate-all-areas.sh` expects, plus `html_escape` and the state-directory resolution. Log lines carry an elapsed-seconds prefix derived from the `SECONDS` builtin (no subprocess per line); `LOG_PERFORMANCE=false` turns it off.
+- **`lib/utils.sh`** — `send_alert`, `send_alert_once`, `check_postgresql`, `check_raid_status`, `format_metrics_table_html`, `redact_sensitive_data`.
+- **`lib/secure-file-utils.sh`** — `sfu_append_file`.
+- **`lib/README.md`** documents the contract, the environment variables, the security model and the five rules any replacement implementation must observe. Those rules are not style preferences: each corresponds to a way the calling scripts break. The most consequential is that every library file must end in `return 0` — the callers source with `|| exit 2`, and the status of `source` is the status of the file's last command, so a trailing guard that happens to be false aborts the caller with a message that explains nothing.
+
+Design decisions worth knowing about:
+
+- **Alerts are never lost silently.** Every alert reaches stderr and `alerts.log` (mode 0600) *before* any delivery is attempted, then goes out via `sendmail -t` (HTML, `charset=UTF-8`) or, failing that, `mail -s` with the body flattened to text — `mail` sends `text/plain`, where raw markup would be unreadable. With no MTA at all, that is stated once per process rather than passed over. Delivery is wrapped in a 30-second timeout: "synchronous" must not mean "indefinite" inside a systemd timer.
+- **The cooldown fails open.** No state directory, an unreadable stamp, or a stamp dated in the future (NTP correction, wrong RTC) all result in the alert being sent. Suppression only ever happens on positive evidence. Stamps live under `/var/lib/pg-toolkit` as root and `$XDG_STATE_HOME`/`$HOME/.local/state` otherwise — deliberately not `/run`, which is cleared at boot and would let a 24-hour cooldown re-fire after every restart.
+- **`check_postgresql` probes `pg_isready` before `systemctl`.** On Debian and Ubuntu `postgresql.service` is a wrapper unit that stays `active (exited)` indefinitely, so `systemctl is-active postgresql` still reports success after `postgresql@16-main` has crashed — precisely the situation `backup-postgres.sh` exists to alert on.
+- **`check_raid_status` returns 0 on a machine without RAID.** `/proc/mdstat` is present on virtually every Linux whether or not an array exists, so its mere presence proves nothing; the check looks for an array line. A resync on a complete bitmap and a spare marker are both healthy, not degraded.
+- **`sfu_append_file` refuses to follow symlinks**, checked with `-L` on the path before the file is opened. That is the entire reason the function exists: `>>` follows symlinks and the monitor runs as root. Deliberately omitted as overhead: `flock` (a single `printf` into an `O_APPEND` descriptor is already atomic below `PIPE_BUF`), temp-file-plus-rename (breaks append semantics), and per-record `fsync`.
+- **`redact_sensitive_data` HTML-escapes its output.** Escaping is required even inside `<pre>`, which changes whitespace handling but not parsing.
+
+#### Documentation link validation
+
+- **Five per-area validators** at `docs/<area>/validate-links.sh` (64 lines each, identical but for the area name) and **`lib/validate-links-core.sh`**, vendored from [bash-markdown-link-validator](https://github.com/fidpa/bash-markdown-link-validator) v1.2.3 (MIT, same copyright holder) so that a fresh clone needs no external dependency.
+- `scripts/validate-all-areas.sh` now validates **371 links across 44 files** and reports 0 broken, 0 warnings.
+
+Two patches were needed against the vendored library; both are marked `PATCH(psql-ai):` in the source and belong upstream:
+
+1. **Link extraction required `.md` in the target**, which silently skipped 38 anchor-only links (`](#vision--mission)`) and every link to a non-markdown file such as `../../scripts/backup-postgres.sh`. Roughly 44 of 371 links were never examined while the report read "0 broken" — the same class of false all-clear that v0.1.2 removed from the orchestrator.
+2. **`build_anchor_index()` recognised only HTML `id="..."` attributes**, not the markdown form `{#slug}`. A heading `## VISION & MISSION {#vision--mission}` produced the slug `vision-mission-vision-mission`, so the link pointing at it did not resolve.
+
+#### Tests
+
+- **`tests/run-lib-tests.sh`** — 62 checks, no test framework, runs as an ordinary user. Four injection points (`PG_TOOLKIT_STATE_DIR`, `PG_TOOLKIT_NOW`, `PG_TOOLKIT_MDSTAT`, `PG_TOOLKIT_NO_MTA`) replace the production environment. Fixtures: seven `/proc/mdstat` variants and a PostgreSQL error log carrying fabricated credentials.
+- Every check that guards against a false all-clear is written in **both directions**: the clean tree must stay silent *and* a planted fault must be caught. The link-validator test plants a broken file link, a dead anchor and a missing non-markdown target, and asserts all three are reported while a valid anchor on the same page is not.
+- New CI job `lib-tests`; the ShellCheck job now covers `scripts/`, `lib/`, `tests/` and the validators under `docs/` (13 scripts, 0 findings at `--severity=warning`, which is stricter than the CI gate's `--severity=error`).
+
+### Fixed
+
+- **Performance alerts went to the default recipient instead of `ALERT_EMAIL`.** `monitor-postgres-performance.sh` passed the recipient as argument 9 with an empty argument 5, while `backup-postgres.sh` — the canonical signature — passes it as argument 5. Both call sites now match; a library can only implement one order.
+- **`sudo mdadm --detail` could block on a password prompt.** It runs in the RAID-degraded alert path, inside a systemd timer, so an interactive prompt would hang the unit until its timeout. Now `sudo -n`.
+- **`ps aux` output went unredacted into alert mails.** Process command lines can contain `PGPASSWORD=` and similar. `$raid_status`, `$raid_detail`, `$mem_detail`, `$top_cpu_consumers` and `$top_mem_consumers` are now passed through `redact_sensitive_data`.
+- **The Docker container status could contain a newline and break the metrics record.** `docker inspect -f … || echo "not_found"` is wrong when the container is absent: docker prints an empty line to stdout *and* exits non-zero, so the fallback was appended to that line and the value became two lines. The value is captured first and substituted afterwards.
+- **RAID metrics were collected based on the existence of `/proc/mdstat`**, which proves nothing. The metric is now emitted only when an array line is actually present.
+- **Two documentation anchors pointed at truncated slugs** and did nothing when clicked: `#part-1--configuration` for the heading `## Part 1 — Configuration Reference` in `POSTGRES_TUNING.md`, and `#postgresql-setup` for `## PostgreSQL Setup & Configuration` in `POSTGRESQL_REFERENZ.md`. Both were found by the newly complete link extraction.
+- `PERF_METRICS_LOG` and `BACKUP_LOG` make the hardcoded `/var/log/...` paths overridable, so the scripts can be exercised without root.
+
+### Changed
+
+- README: the section formerly headed *Operational scripts: what is and is not shipped* is now *Operational scripts* and states per script what it still requires at runtime — `backup-postgres.sh` continues to need root, `pg_dumpall`, `zstd` and a writable `/postgresql/backups`, which shipping a library does not change.
+- `CLAUDE.md`: directory layout extended with `lib/` and `tests/`; the description of `validate-all-areas.sh` corrected — it validates documentation links, not "schema + functions + views".
+
+### Upgrade notes
+
+- **If you supplied your own library via `PG_TOOLKIT_LIB_DIR`, nothing changes** — that variable still takes precedence. Read `lib/README.md` for the five rules; violating any of them makes the calling script exit 2.
+- **Performance alerts now reach `ALERT_EMAIL`.** If you relied on them arriving at `root@localhost` while `ALERT_EMAIL` was set to something else, that address will start receiving them.
+- **Alerts are written to `alerts.log` in the state directory** (mode 0600) in addition to being mailed. The file grows without bound and contains full alert bodies including system details — add it to your log rotation.
+- **`sfu_append_file` now refuses symlinked targets.** If your metrics log is deliberately a symlink, point `PERF_METRICS_LOG` at the real path instead.
+
 ## [0.1.2] - 2026-08-09
 
 Audit of the operational scripts against what they actually do when run. Three of the four scripts in `scripts/` could not work as shipped — they depend on components of the original server that were never published — and one of them reported success while doing nothing. Everything here is a repair or a corrected statement; no view, function, KPI definition or business rule was touched.
@@ -92,6 +152,7 @@ Initial public release.
 - `sql/procedures/` is intentionally empty — refresh and health-check procedures were considered too environment-specific to generalise. See [`sql/procedures/README.md`](sql/procedures/README.md) for portable re-implementation hints.
 - The retention window is parameterised (default 180 days), not a domain-specific deadline.
 
+[0.2.0]: https://github.com/fidpa/psql-ai-assisted-development/releases/tag/v0.2.0
 [0.1.2]: https://github.com/fidpa/psql-ai-assisted-development/releases/tag/v0.1.2
 [0.1.1]: https://github.com/fidpa/psql-ai-assisted-development/releases/tag/v0.1.1
 [0.1.0]: https://github.com/fidpa/psql-ai-assisted-development/releases/tag/v0.1.0

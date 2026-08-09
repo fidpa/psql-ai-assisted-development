@@ -15,9 +15,10 @@
 #          retention management
 # System:  legacy-host Linux server (Ubuntu 24.04 LTS, PostgreSQL 16, 64 GB RAM)
 #
-# REQUIREMENT: this script sources a shared shell library that is NOT shipped
-# with the public release (see the guard below and the README). Without it the
-# script exits 2 and does nothing.
+# REQUIREMENT: this script sources the shared shell library in lib/, which ships
+# with the repository since v0.2.0. Point PG_TOOLKIT_LIB_DIR at your own
+# implementation to replace it. If the library cannot be found the script exits 2
+# and does nothing rather than failing halfway through.
 
 set -uo pipefail  # NO -e: explicit error handling
 
@@ -28,10 +29,8 @@ LOG_TAG="$(basename "$0" .sh)"
 # shellcheck disable=SC2034  # read by the sourced logging library
 readonly LOG_TAG
 
-# Shared shell library. NOT shipped with the public release — it was too tied
-# to the original server layout to generalise. Supply your own implementation
-# of the functions listed below, or point PG_TOOLKIT_LIB_DIR at a directory
-# that contains them.
+# Shared shell library, shipped in lib/ since v0.2.0. Set PG_TOOLKIT_LIB_DIR to
+# use your own implementation of the functions listed below instead.
 #
 # The path used to be ${SCRIPT_DIR}/../../../lib, which resolves to a directory
 # three levels ABOVE the repository root — a leftover from the original tree.
@@ -41,8 +40,8 @@ for _lib in logging.sh utils.sh; do
     if [[ ! -r "${LIB_DIR}/${_lib}" ]]; then
         echo "ERROR: required library not found: ${LIB_DIR}/${_lib}" >&2
         echo "" >&2
-        echo "This script depends on a shared shell library that is not shipped" >&2
-        echo "with the public release. Provide your own implementation of:" >&2
+        echo "This script depends on the shared shell library in lib/." >&2
+        echo "Expected there, or in PG_TOOLKIT_LIB_DIR, providing:" >&2
         echo "  log_info, log_warning, log_success, log_error," >&2
         echo "  send_alert, send_alert_once, check_postgresql, check_raid_status," >&2
         echo "  format_metrics_table_html, redact_sensitive_data" >&2
@@ -62,6 +61,7 @@ DATE=$(date +%Y%m%d_%H%M%S)
 readonly DATE
 readonly BACKUP_FILE="$BACKUP_DIR/all_databases_$DATE.sql"
 readonly LOG_PREFIX="[PostgreSQL Backup]"
+readonly BACKUP_LOG="${BACKUP_LOG:-/var/log/postgresql-backup.log}"
 
 # Cleanup handler
 cleanup() {
@@ -116,8 +116,11 @@ main() {
     if ! check_raid_status; then
         log_warning "$LOG_PREFIX RAID is degraded! Backup will proceed, but RAID needs attention."
 
-        raid_status=$(cat /proc/mdstat 2>/dev/null || echo "Unable to read RAID status")
-        raid_detail=$(sudo mdadm --detail /dev/md0 2>/dev/null || echo "Unable to read mdadm details")
+        raid_status=$(redact_sensitive_data "$(cat /proc/mdstat 2>/dev/null || echo "Unable to read RAID status")")
+        # sudo -n: never block on a password prompt. This runs inside a systemd
+        # timer, in the alert path, so an interactive prompt would hang the unit
+        # until its timeout.
+        raid_detail=$(redact_sensitive_data "$(sudo -n mdadm --detail /dev/md0 2>/dev/null || echo "Unable to read mdadm details")")
 
         send_alert_once "backup_postgres_raid_degraded" "$ALERT_COOLDOWN" \
             "[PostgreSQL Backup] WARNING: RAID Degraded" \
@@ -202,14 +205,14 @@ main() {
     # Create backup
     log_info "$LOG_PREFIX Creating backup: $BACKUP_FILE"
 
-    if pg_dumpall > "$BACKUP_FILE" 2>> /var/log/postgresql-backup.log; then
+    if pg_dumpall > "$BACKUP_FILE" 2>> "$BACKUP_LOG"; then
         BACKUP_SIZE=$(du -h "$BACKUP_FILE" | cut -f1)
         log_success "$LOG_PREFIX Backup created successfully: $BACKUP_FILE (Size: $BACKUP_SIZE)"
     else
-        log_error "$LOG_PREFIX pg_dumpall failed! Check /var/log/postgresql-backup.log"
+        log_error "$LOG_PREFIX pg_dumpall failed! Check $BACKUP_LOG"
 
         # Get recent errors from PostgreSQL logs (redacted for security)
-        pg_errors=$(tail -20 /var/log/postgresql-backup.log 2>/dev/null || echo "Unable to read backup log")
+        pg_errors=$(tail -20 "$BACKUP_LOG" 2>/dev/null || echo "Unable to read backup log")
         pg_errors=$(redact_sensitive_data "$pg_errors")
 
         send_alert_once "backup_postgres_dump_failed" "$ALERT_COOLDOWN" \

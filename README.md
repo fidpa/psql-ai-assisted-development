@@ -30,6 +30,9 @@ The source domain has been replaced with a generic document-processing / order-t
   and verification queries.
 - **Operational scripts**: [`pg_dumpall`-based backup with retention](scripts/backup-postgres.sh),
   and a [cache-hit-ratio / `pg_stat_statements` performance monitor](scripts/monitor-postgres-performance.sh).
+  Read [*Operational scripts: what is and is not shipped*](#operational-scripts-what-is-and-is-not-shipped)
+  before running either — they are reference implementations with an external
+  dependency, not turn-key tools.
 - **Diátaxis documentation**: tutorial / how-to / reference / explanation —
   four entry points for four kinds of reader.
 - **Claude Code workflow blueprint**: a [`CLAUDE.md`](CLAUDE.md) that doubles
@@ -145,6 +148,7 @@ LEFT JOIN c_werte c ON TRUE;
 ```
 
 Patterns visible at a glance:
+
 - **One CTE per KPI family** — the alphabetic codes (`E`/`S`/`D`/`V`/`C`)
   isolate each business question, so a change in scanning logic cannot leak
   into expiry KPIs.
@@ -194,6 +198,52 @@ psql -h localhost -U postgres -c "SELECT fn_easter_sunday(2026);"
 For production deployment, see [`docs/reference/POSTGRES_TUNING.md`](docs/reference/POSTGRES_TUNING.md)
 — `shared_buffers`, `effective_cache_size`, `pg_hba.conf` templates, and
 verification queries for a 64 GB NVMe host.
+
+---
+
+## Operational scripts: what is and is not shipped
+
+The same rule that applies to the source tables applies to
+[`scripts/`](scripts/): what is published is the **logic**, not a turn-key
+installation. Three of the four scripts depend on components of the original
+server that were too environment-specific to generalise. Each one now says so
+on standard error and exits non-zero, instead of failing halfway through or —
+worse — reporting a success it did not earn.
+
+| Script | Runs as shipped? | External dependency |
+|--------|------------------|---------------------|
+| [`deploy.sh`](scripts/deploy.sh) | **yes** | `psql` on `PATH` |
+| [`backup-postgres.sh`](scripts/backup-postgres.sh) | no — exits 2 | shared shell library (`logging.sh`, `utils.sh`) |
+| [`monitor-postgres-performance.sh`](scripts/monitor-postgres-performance.sh) | no — exits 2 | shared shell library (`logging.sh`, `utils.sh`, `secure-file-utils.sh`) |
+| [`validate-all-areas.sh`](scripts/validate-all-areas.sh) | no — exits 2 | a per-area validator at `docs/<area>/validate-links.sh` |
+
+**The shared shell library** must provide, across both scripts: `log_info`,
+`log_warning`, `log_success`, `log_error`, `send_alert`, `send_alert_once`,
+`check_postgresql`, `check_raid_status`, `format_metrics_table_html`,
+`redact_sensitive_data` and `sfu_append_file`. Each script names the subset it
+needs in its own error message. Point `PG_TOOLKIT_LIB_DIR` at your own
+implementation:
+
+```bash
+PG_TOOLKIT_LIB_DIR=/opt/mytools/lib bash scripts/backup-postgres.sh
+```
+
+`send_alert_once` is expected to deduplicate by key within a cooldown window —
+the callers pass a key and a cooldown in seconds.
+
+**Environment variables** read by the scripts:
+
+| Variable | Default | Used by |
+|----------|---------|---------|
+| `PG_TOOLKIT_LIB_DIR` | `scripts/../lib` | backup, monitor |
+| `PG_MONITORING_PASSWORD` | *(empty)* | monitor — password for the read-only `monitoring` role |
+| `PERF_ALERT_HIGH_LOAD` | `true` | monitor |
+| `ALERT_EMAIL` | `root@localhost` | backup, monitor |
+| `BACKUP_SUCCESS_NOTIFICATION` | `false` | backup |
+
+**The per-area link validator** is described in the requirement block at the
+top of [`validate-all-areas.sh`](scripts/validate-all-areas.sh), including the
+four aggregate lines the orchestrator parses.
 
 ---
 
@@ -270,7 +320,7 @@ working language.
 | PostgreSQL tuning integration | ✅ Complete |
 | Second-round conceptual generalisation | ✅ Complete |
 | README & docs finalisation | ✅ Complete |
-| Validation sweep + first release | ✅ Released as v0.1.3 (2026-05-14) |
+| Validation sweep + first release | ✅ Complete — see [CHANGELOG.md](CHANGELOG.md) for released versions |
 
 ---
 

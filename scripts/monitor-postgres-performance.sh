@@ -7,27 +7,61 @@
 # requires_root: true
 # timer: performance-monitor.timer
 # ---
-# performance-monitor.sh - System-Performance-Monitoring & Logging
+# monitor-postgres-performance.sh - system performance monitoring & logging
 # Version: 2.3
-# v2.3 (2026-01-05): Alert-Cooldown implementiert (1h)
-# v2.2 (2025-12-10): Unnötige sudo-Aufrufe entfernt (Datei gehört bereits dbadmin)
-# v2.1 (2025-10-20): Migration zu secure-file-utils.sh (1 Append-Operation)
-# v2.0 (2025-10-20): Guidelines-Konform
-# Datum: 2025-10-20
-# Zweck: System-Performance-Metriken monitoren und loggen (CPU, RAM, Disk I/O, PostgreSQL)
-# System: legacy-host Linux-Server (Ubuntu 24.04 LTS, 64GB RAM, PostgreSQL 16)
+# v2.3 (2026-01-05): alert cooldown implemented (1h)
+# v2.2 (2025-12-10): removed unnecessary sudo calls (the file is already owned
+#                    by the service account)
+# v2.1 (2025-10-20): migrated to secure-file-utils.sh (1 append operation)
+# v2.0 (2025-10-20): guidelines-compliant
+# Date:    2025-10-20
+# Purpose: monitor and log system performance metrics (CPU, RAM, disk I/O,
+#          PostgreSQL)
+# System:  legacy-host Linux server (Ubuntu 24.04 LTS, 64 GB RAM, PostgreSQL 16)
+#
+# REQUIREMENT: this script sources a shared shell library that is NOT shipped
+# with the public release (see the guard below and the README). Without it the
+# script exits 2 and does nothing.
 
-set -uo pipefail  # KEIN -e: Explizites Error-Handling
+set -uo pipefail  # NO -e: explicit error handling
 
 # Source Common Library
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 readonly SCRIPT_DIR
 LOG_TAG="$(basename "$0" .sh)"
+# shellcheck disable=SC2034  # read by the sourced logging library
 readonly LOG_TAG
 
-source "${SCRIPT_DIR}/../lib/logging.sh" || exit 1
-source "${SCRIPT_DIR}/../lib/utils.sh" || exit 1
-source "${SCRIPT_DIR}/../lib/secure-file-utils.sh" || exit 1
+# Shared shell library. NOT shipped with the public release — it was too tied
+# to the original server layout to generalise. Supply your own implementation
+# of the functions listed below, or point PG_TOOLKIT_LIB_DIR at a directory
+# that contains them.
+LIB_DIR="${PG_TOOLKIT_LIB_DIR:-${SCRIPT_DIR}/../lib}"
+readonly LIB_DIR
+for _lib in logging.sh utils.sh secure-file-utils.sh; do
+    if [[ ! -r "${LIB_DIR}/${_lib}" ]]; then
+        echo "ERROR: required library not found: ${LIB_DIR}/${_lib}" >&2
+        echo "" >&2
+        echo "This script depends on a shared shell library that is not shipped" >&2
+        echo "with the public release. Provide your own implementation of:" >&2
+        echo "  log_info, log_warning, log_success, log_error," >&2
+        echo "  send_alert_once, check_postgresql," >&2
+        echo "  format_metrics_table_html, sfu_append_file" >&2
+        echo "or set PG_TOOLKIT_LIB_DIR to a directory that contains them." >&2
+        exit 2
+    fi
+    # shellcheck source=/dev/null
+    source "${LIB_DIR}/${_lib}" || exit 2
+done
+unset _lib
+
+# Environment (see README, "Operational scripts: what is and is not shipped"):
+#   PG_MONITORING_PASSWORD  password for the read-only `monitoring` role. Was
+#                           UBUNTU_POSTGRES_MONITORING_PASSWORD without a
+#                           default, which tripped `set -u`; every PostgreSQL
+#                           metric then silently fell back to "0"/"N/A".
+#   PERF_ALERT_HIGH_LOAD    send alerts on threshold breach (default: true)
+#   ALERT_EMAIL             alert recipient (default: root@localhost)
 
 # Configuration - All readonly
 readonly LOG_PREFIX="[Performance Monitor]"
@@ -37,7 +71,9 @@ readonly ALERT_ON_HIGH_LOAD="${PERF_ALERT_HIGH_LOAD:-true}"
 # Thresholds - All readonly
 readonly CPU_LOAD_HIGH=80
 readonly MEMORY_USAGE_HIGH=85
-readonly DISK_IO_HIGH=1000  # MB/s
+# NOTE: a DISK_IO_HIGH threshold used to be declared here but was never
+# evaluated anywhere in this script. Removed rather than left standing:
+# a threshold that nothing enforces reads like a guarantee that does not exist.
 
 # Alert Cooldown (1 hour)
 ALERT_COOLDOWN=3600
@@ -95,7 +131,7 @@ main() {
             local io_wait
             io_wait=$(iostat -c 1 2 | tail -1 | awk '{print $4}' 2>/dev/null || echo "0")
             local pg_connections
-            pg_connections=$(PGPASSWORD="${UBUNTU_POSTGRES_MONITORING_PASSWORD}" psql -U monitoring -h localhost -d postgres -t -c "SELECT count(*) FROM pg_stat_activity;" 2>/dev/null | xargs || echo "0")
+            pg_connections=$(PGPASSWORD="${PG_MONITORING_PASSWORD:-}" psql -U monitoring -h localhost -d postgres -t -c "SELECT count(*) FROM pg_stat_activity;" 2>/dev/null | xargs || echo "0")
             local container_count
             container_count=$(docker ps --format '{{.Names}}' 2>/dev/null | wc -l || echo "0")
 
@@ -151,8 +187,6 @@ $top_cpu_consumers</pre>" \
     mem_total=$(free -m | grep Mem | awk '{print $2}')
     local mem_used
     mem_used=$(free -m | grep Mem | awk '{print $3}')
-    local mem_free
-    mem_free=$(free -m | grep Mem | awk '{print $4}')
     local mem_available
     mem_available=$(free -m | grep Mem | awk '{print $7}')
     local mem_usage_pct
@@ -253,17 +287,17 @@ $top_mem_consumers</pre>" \
     if check_postgresql; then
         # Active connections
         local pg_connections
-        pg_connections=$(PGPASSWORD="${UBUNTU_POSTGRES_MONITORING_PASSWORD}" psql -U monitoring -h localhost -d postgres -t -c "SELECT count(*) FROM pg_stat_activity;" 2>/dev/null | xargs || echo "0")
+        pg_connections=$(PGPASSWORD="${PG_MONITORING_PASSWORD:-}" psql -U monitoring -h localhost -d postgres -t -c "SELECT count(*) FROM pg_stat_activity;" 2>/dev/null | xargs || echo "0")
 
         # Database size (largest DB)
         local pg_largest_db
-        pg_largest_db=$(PGPASSWORD="${UBUNTU_POSTGRES_MONITORING_PASSWORD}" psql -U monitoring -h localhost -d postgres -t -c "SELECT datname FROM pg_database WHERE datname NOT IN ('template0', 'template1', 'postgres') ORDER BY pg_database_size(datname) DESC LIMIT 1;" 2>/dev/null | xargs || echo "N/A")
+        pg_largest_db=$(PGPASSWORD="${PG_MONITORING_PASSWORD:-}" psql -U monitoring -h localhost -d postgres -t -c "SELECT datname FROM pg_database WHERE datname NOT IN ('template0', 'template1', 'postgres') ORDER BY pg_database_size(datname) DESC LIMIT 1;" 2>/dev/null | xargs || echo "N/A")
         local pg_largest_db_size
-        pg_largest_db_size=$(PGPASSWORD="${UBUNTU_POSTGRES_MONITORING_PASSWORD}" psql -U monitoring -h localhost -d postgres -t -c "SELECT pg_size_pretty(pg_database_size('$pg_largest_db'));" 2>/dev/null | xargs || echo "N/A")
+        pg_largest_db_size=$(PGPASSWORD="${PG_MONITORING_PASSWORD:-}" psql -U monitoring -h localhost -d postgres -t -c "SELECT pg_size_pretty(pg_database_size('$pg_largest_db'));" 2>/dev/null | xargs || echo "N/A")
 
         # Cache hit ratio (should be > 99%)
         local pg_cache_hit_ratio
-        pg_cache_hit_ratio=$(PGPASSWORD="${UBUNTU_POSTGRES_MONITORING_PASSWORD}" psql -U monitoring -h localhost -d postgres -t -c "SELECT ROUND((sum(heap_blks_hit) / NULLIF((sum(heap_blks_hit) + sum(heap_blks_read)), 0)) * 100, 2) FROM pg_statio_user_tables;" 2>/dev/null | xargs || echo "N/A")
+        pg_cache_hit_ratio=$(PGPASSWORD="${PG_MONITORING_PASSWORD:-}" psql -U monitoring -h localhost -d postgres -t -c "SELECT ROUND((sum(heap_blks_hit) / NULLIF((sum(heap_blks_hit) + sum(heap_blks_read)), 0)) * 100, 2) FROM pg_statio_user_tables;" 2>/dev/null | xargs || echo "N/A")
 
         log_info "$LOG_PREFIX PostgreSQL: $pg_connections connections, largest DB: $pg_largest_db ($pg_largest_db_size), cache hit: ${pg_cache_hit_ratio}%"
 

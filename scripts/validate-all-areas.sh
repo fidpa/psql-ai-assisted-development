@@ -1,53 +1,86 @@
-#!/opt/homebrew/bin/bash
-# psql-order_processing: DIATAXIS Link Validation Orchestrator
-# Validiert alle 5 DIATAXIS-Areas (tutorial, how-to, reference, explanation, entry-points)
-# Version: 1.0.0
-# Erstellt: 13. November 2025
-# Autor: Marc Allgeier
+#!/bin/bash
+# order_processing: Diataxis link-validation orchestrator
+# Validates the five Diataxis areas: tutorial, how-to, reference, explanation,
+# entry-points.
 #
-# Changelog v1.0.1 (17.11.2025):
-# - ✅ Batch 6 Optimizations (Variable quoting, error handling improvements)
+# Tool version (own axis, deliberately not the repository version — see
+# CHANGELOG.md for the repository version).
+# Version: 1.1.0
+# Created:  2025-11-13
+# Authorship: see LICENSE (the other scripts in this directory carry no author
+# line either; one attribution in one place is enough).
 #
-# Changelog v1.0.0 (13.11.2025):
-# - ✅ Initial Release für Ubuntu Server
-# - ✅ Validiert alle 6 DIATAXIS-Areas parallel oder sequential
-# - ✅ Aggregierte Statistiken (Total Broken Links, Total Files)
-# - ✅ Farbiger Summary-Report mit Exit Code
-# - ✅ Ubuntu SCRIPTING_GUIDELINES compliant (set -uo pipefail, logging.sh)
+# REQUIREMENT — READ BEFORE RUNNING:
+#   This script is an *orchestrator*. It calls a per-area validator at
+#   docs/<area>/validate-links.sh and aggregates the results. Those per-area
+#   validators are NOT shipped with the public release (they were too tied to
+#   the original documentation tree to generalise), exactly like the
+#   source-table DDL and sql/procedures/. Without them the script exits 2 with
+#   an explicit message; it does not pretend to have validated anything.
+#   Supply your own validator per area, or use any link checker you prefer.
+#
+#   Contract for a drop-in validator (docs/<area>/validate-links.sh):
+#     - exit 0 when all links are valid, non-zero otherwise
+#     - accept --verbose, --no-color and -j N (all optional)
+#     - print these aggregate lines verbatim, so this script can parse them:
+#         Total files scanned: N
+#         Total links found: N
+#         Broken links: N
+#         Warnings: N
 #
 # Features:
-# - Validiert 6 DIATAXIS-Areas: tutorial/, how-to/, reference/, explanation/, entry-points/, dashboard/
-# - Parallel-Unterstützung (-j N Flag für parallele Jobs pro Area)
-# - Aggregierte Statistiken über alle Areas
-# - Farbiger Summary-Report
-# - Exit Code: 0=Alles OK, 1=Mindestens 1 Area mit Broken Links
+# - Validates five Diataxis areas: tutorial/, how-to/, reference/,
+#   explanation/, entry-points/
+# - Optional parallelism (-j N, passed through to each area validator)
+# - Aggregated statistics across all areas
+# - Coloured summary report
 #
 # Usage:
 #   validate-all-areas.sh [OPTIONS]
 #
 # OPTIONS:
-#   -j N, --parallel-jobs=N Führe N parallele Jobs pro Area aus (default: 1)
-#   -v, --verbose           Zeige detaillierte Ausgabe für alle Links
-#   --no-color              Deaktiviere farbige Ausgabe
-#   -h, --help              Zeige diese Hilfe
+#   -j N, --parallel-jobs=N Run N parallel jobs per area (default: 1)
+#   -v, --verbose           Show detailed output for every link
+#   --no-color              Disable coloured output
+#   -h, --help              Show this help
 #
 # EXIT CODES:
-#   0 - Alle Links in allen Areas valide
-#   1 - Mindestens 1 Area hat broken links
-#   2 - Script-Fehler
+#   0 - every area ran and all links are valid
+#   1 - at least one area reported broken links OR failed to run
+#   2 - script error, or no per-area validator found (see REQUIREMENT above)
 #
 # EXAMPLES:
-#   validate-all-areas.sh           # Sequential validation (alle Areas)
-#   validate-all-areas.sh -j 4       # Parallel (4 jobs pro Area)
-#   validate-all-areas.sh --verbose  # Detaillierte Ausgabe
+#   validate-all-areas.sh            # sequential validation (all areas)
+#   validate-all-areas.sh -j 4       # parallel (4 jobs per area)
+#   validate-all-areas.sh --verbose  # detailed output
+#
+# Changelog v1.1.0:
+# - An area that fails to run is now a failure. Until v1.0.1 the final verdict
+#   looked only at the broken-link counter, so a run in which every single area
+#   aborted with exit 127 still printed "All links validated successfully!" and
+#   exited 0.
+# - Missing per-area validators are detected up front and reported, instead of
+#   surfacing as a bare exit 127 per area.
+# - Shebang fixed: was /opt/homebrew/bin/bash (macOS-only), which made direct
+#   execution fail on every Linux host with "bad interpreter".
+#
+# Changelog v1.0.1 (2025-11-17):
+# - Batch 6 optimisations (variable quoting, error-handling improvements)
+#
+# Changelog v1.0.0 (2025-11-13):
+# - Initial release for Ubuntu Server
+# - Validates all Diataxis areas, sequentially or in parallel
+# - Aggregated statistics (total broken links, total files)
+# - Coloured summary report with exit code
+# - Follows the Ubuntu scripting guidelines (set -uo pipefail, logging.sh)
 
-set -uo pipefail  # NO -e: Explizites Error Handling (Ubuntu Guidelines)
+set -uo pipefail  # NO -e: explicit error handling (Ubuntu guidelines)
 
 # ============================================================================
 # VERSION & METADATA (DRY Pattern)
 # ============================================================================
 
-readonly VERSION="1.0.0"
+readonly VERSION="1.1.0"
 SCRIPT_NAME="$(basename "$0" .sh)"
 readonly SCRIPT_NAME
 # NOTE: Using _SCRIPT_PATH to avoid readonly conflict with logging.sh
@@ -352,6 +385,32 @@ main() {
     # Setup colors
     setup_colors
 
+    # Preflight: the per-area validators are the actual workers. They are not
+    # shipped with the public release (see REQUIREMENT in the file header).
+    # Without this check every area aborts with a bare exit 127, which reads
+    # like a broken script rather than a missing dependency.
+    local missing_validators=()
+    local area
+    for area in "${AREAS[@]}"; do
+        if [[ ! -x "${DOCS_DIR}/${area}/validate-links.sh" ]]; then
+            missing_validators+=("docs/${area}/validate-links.sh")
+        fi
+    done
+    if [[ ${#missing_validators[@]} -eq ${#AREAS[@]} ]]; then
+        log_error "No per-area validator found — nothing was validated."
+        echo "" >&2
+        echo "This script orchestrates per-area validators that are not shipped" >&2
+        echo "with the public release. Expected (executable):" >&2
+        printf '  %s\n' "${missing_validators[@]}" >&2
+        echo "" >&2
+        echo "See the REQUIREMENT block at the top of this file for the contract" >&2
+        echo "a drop-in validator has to satisfy." >&2
+        return 2
+    elif [[ ${#missing_validators[@]} -gt 0 ]]; then
+        log_warn "Missing validators (these areas will be reported as failed):"
+        printf '  %s\n' "${missing_validators[@]}" >&2
+    fi
+
     # Header
     echo -e "${BOLD}${BLUE}============================================="
     echo -e " DIATAXIS Link Validation Report"
@@ -411,7 +470,19 @@ main() {
     echo -e "${BOLD}Duration:${NC} ${duration}s"
     echo ""
 
-    # Final status
+    # Final status.
+    # An area that never ran is a failure, not a success. Until v1.0.1 this
+    # branch looked at $total_broken alone: a run in which all five areas
+    # aborted with exit 127 reported "All links validated successfully!" and
+    # exited 0, because a validator that never runs also never finds a broken
+    # link. The failure counter is checked first for exactly that reason.
+    if [[ $failed_areas -gt 0 && $total_broken -eq 0 ]]; then
+        echo -e "${RED}❌ $failed_areas of $total_areas areas did not run — nothing was validated there${NC}"
+        echo ""
+        echo -e "${CYAN}TIP:${NC} Run with --verbose to see the validator output"
+        return 1
+    fi
+
     if [[ $total_broken -eq 0 ]]; then
         if [[ $total_warnings -gt 0 ]]; then
             echo -e "${YELLOW}⚠️  All links valid, but $total_warnings warnings found${NC}"

@@ -50,6 +50,7 @@ scripts/_internal/
 # Nextcloud / rclone symlinks
 *.rclonelink
 
-# Claude Code local overrides
-.claude/settings.local.json
-.claude/.cache/
+# Claude Code working directory (slash commands, settings, caches).
+# NOTE: CLAUDE.md is deliberately NOT ignored — it is a shipped artifact of this
+# repository (see README "Claude Code workflow blueprint"), not a local override.
+.claude/

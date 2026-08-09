@@ -7,23 +7,52 @@
 # requires_root: true
 # timer: backup-postgresql.timer
 # ---
-# backup-postgresql.sh - PostgreSQL Automatisiertes Backup
-# Version: 2.2 (zstd Compression + Alert-Cooldown)
-# Datum: 2025-12-16
-# v2.2 (2026-01-05): Alert-Cooldown implementiert (24h)
-# Zweck: Tägliches PostgreSQL-Backup mit pg_dumpall, Kompression und Retention-Management
-# System: legacy-host Linux-Server (Ubuntu 24.04 LTS, PostgreSQL 16, 64GB RAM)
+# backup-postgres.sh - automated PostgreSQL backup
+# Version: 2.2 (zstd compression + alert cooldown)
+# Date:    2025-12-16
+# v2.2 (2026-01-05): alert cooldown implemented (24h)
+# Purpose: daily PostgreSQL backup via pg_dumpall, with compression and
+#          retention management
+# System:  legacy-host Linux server (Ubuntu 24.04 LTS, PostgreSQL 16, 64 GB RAM)
+#
+# REQUIREMENT: this script sources a shared shell library that is NOT shipped
+# with the public release (see the guard below and the README). Without it the
+# script exits 2 and does nothing.
 
-set -uo pipefail  # KEIN -e: Explizites Error-Handling
+set -uo pipefail  # NO -e: explicit error handling
 
 # Source Common Library
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 readonly SCRIPT_DIR
 LOG_TAG="$(basename "$0" .sh)"
+# shellcheck disable=SC2034  # read by the sourced logging library
 readonly LOG_TAG
 
-source "${SCRIPT_DIR}/../../../lib/logging.sh" || exit 1
-source "${SCRIPT_DIR}/../../../lib/utils.sh" || exit 1
+# Shared shell library. NOT shipped with the public release — it was too tied
+# to the original server layout to generalise. Supply your own implementation
+# of the functions listed below, or point PG_TOOLKIT_LIB_DIR at a directory
+# that contains them.
+#
+# The path used to be ${SCRIPT_DIR}/../../../lib, which resolves to a directory
+# three levels ABOVE the repository root — a leftover from the original tree.
+LIB_DIR="${PG_TOOLKIT_LIB_DIR:-${SCRIPT_DIR}/../lib}"
+readonly LIB_DIR
+for _lib in logging.sh utils.sh; do
+    if [[ ! -r "${LIB_DIR}/${_lib}" ]]; then
+        echo "ERROR: required library not found: ${LIB_DIR}/${_lib}" >&2
+        echo "" >&2
+        echo "This script depends on a shared shell library that is not shipped" >&2
+        echo "with the public release. Provide your own implementation of:" >&2
+        echo "  log_info, log_warning, log_success, log_error," >&2
+        echo "  send_alert, send_alert_once, check_postgresql, check_raid_status," >&2
+        echo "  format_metrics_table_html, redact_sensitive_data" >&2
+        echo "or set PG_TOOLKIT_LIB_DIR to a directory that contains them." >&2
+        exit 2
+    fi
+    # shellcheck source=/dev/null
+    source "${LIB_DIR}/${_lib}" || exit 2
+done
+unset _lib
 
 # Configuration - All readonly
 readonly BACKUP_DIR="/postgresql/backups"

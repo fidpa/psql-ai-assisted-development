@@ -62,8 +62,15 @@ bash scripts/backup-postgres.sh
 # Cache-hit-ratio and pg_stat_statements snapshot
 bash scripts/monitor-postgres-performance.sh
 
-# Cross-area validation (schema + functions + views)
+# Documentation link validation across the five Diátaxis areas.
+# Orchestrator only: it calls docs/<area>/validate-links.sh, and those per-area
+# validators are NOT shipped with the public release. Without them the script
+# exits 2 with an explicit message — it does not report a false success.
 bash scripts/validate-all-areas.sh
+
+# Deploy the SQL bundle (prompts for confirmation, resolves deploy.sql
+# relative to the script, so any working directory works)
+bash scripts/deploy.sh order_processing localhost 5432 postgres
 ```
 
 ### View development workflow

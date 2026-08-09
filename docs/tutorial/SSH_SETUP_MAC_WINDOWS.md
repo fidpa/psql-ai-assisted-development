@@ -45,7 +45,7 @@ ipconfig | findstr "IPv4"
 ```
    IPv4-Adresse  . . . . . . . . . . : 10.0.0.10
    IPv4-Adresse  . . . . . . . . . . : 10.0.0.1
-   IPv4-Adresse  . . . . . . . . . . : 172.26.176.1
+   IPv4-Adresse  . . . . . . . . . . : 10.0.0.2
 ```
 **→ Notiere die erste IP (10.0.0.10 = Haupt-Netzwerk-IP)**
 

@@ -15,10 +15,30 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract changelog section
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          VER_RE=$(printf '%s' "$VERSION" | sed 's/\./\\./g')
+          # From the version heading to EOF, then drop the heading itself,
+          # everything from the next "## [" onwards, and the trailing
+          # link-definition block. sed (not awk) on purpose: no record
+          # specifier, so the snippet survives being quoted anywhere.
+          sed -n "/^## \[${VER_RE}\]/,\$p" CHANGELOG.md \
+            | sed -e '1d' -e '/^## \[/,$d' -e '/^\[[0-9][^]]*\]: http/,$d' \
+            > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "::error::No CHANGELOG section found for ${VERSION}"
+            exit 1
+          fi
+          wc -c release-notes.md
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
-          generate_release_notes: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          body_path: release-notes.md
+          draft: false
+          prerelease: ${{ contains(github.ref, '-') }}

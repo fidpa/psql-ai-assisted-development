@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2026-08-28: GitHub identifies the project as MIT-licensed
+
+### Changed
+
+- **The repository page shows the MIT licence, and licence-filtered searches
+  find the project.** `LICENSE` carried the repository URL on its own line
+  under the copyright notice. GitHub reads a licence text with an extra line as
+  modified and reports `NOASSERTION`, which leaves the licence field on the
+  repository page empty. The line is gone; the MIT text and the copyright
+  notice are byte-for-byte unchanged, and the URL is still in `README.md`.
+
 ## [0.2.1] - 2026-08-28: Release pages carry a headline and the body of their tag
 
 An editorial pass over this changelog and the four published release pages, against the release-message conventions this portfolio follows. Every measured value, path, function name and version number is unchanged. Where a figure was checked against the tag it describes and did not hold, the corrected value is listed below.
@@ -169,6 +180,7 @@ Initial public release.
 - `sql/procedures/` is intentionally empty, because refresh and health-check procedures were considered too environment-specific to generalise. See [`sql/procedures/README.md`](sql/procedures/README.md) for portable re-implementation hints.
 - The retention window is parameterised (default 180 days), not a domain-specific deadline.
 
+[0.2.2]: https://github.com/fidpa/psql-ai-assisted-development/releases/tag/v0.2.2
 [0.2.1]: https://github.com/fidpa/psql-ai-assisted-development/releases/tag/v0.2.1
 [0.2.0]: https://github.com/fidpa/psql-ai-assisted-development/releases/tag/v0.2.0
 [0.1.2]: https://github.com/fidpa/psql-ai-assisted-development/releases/tag/v0.1.2

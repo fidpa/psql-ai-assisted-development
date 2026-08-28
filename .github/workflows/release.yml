@@ -19,16 +19,21 @@ jobs:
           fetch-depth: 0
 
       - name: Extract changelog section
+        id: changelog
         run: |
           set -euo pipefail
           VERSION="${GITHUB_REF#refs/tags/v}"
           VER_RE=$(printf '%s' "$VERSION" | sed 's/\./\\./g')
           # From the version heading to EOF, then drop the heading itself,
-          # everything from the next "## [" onwards, and the trailing
-          # link-definition block. sed (not awk) on purpose: no record
-          # specifier, so the snippet survives being quoted anywhere.
+          # everything from the next "## [" onwards, the trailing
+          # link-definition block, and the blank line the heading leaves
+          # behind (without that last step every generated body differs
+          # from its own section by one byte). sed (not awk) on purpose:
+          # no record specifier, so the snippet survives being quoted
+          # anywhere.
           sed -n "/^## \[${VER_RE}\]/,\$p" CHANGELOG.md \
             | sed -e '1d' -e '/^## \[/,$d' -e '/^\[[0-9][^]]*\]: http/,$d' \
+            | sed -e '/./,$!d' \
             > release-notes.md
           if [ ! -s release-notes.md ]; then
             echo "::error::No CHANGELOG section found for ${VERSION}"
@@ -36,9 +41,21 @@ jobs:
           fi
           wc -c release-notes.md
 
+          # The release title comes from the headline behind the date in the
+          # same heading, so title and body have one source. Without a title,
+          # softprops/action-gh-release falls back to the bare tag name.
+          HEADLINE=$(sed -n "/^## \[${VER_RE}\]/{s/^## \[${VER_RE}\][^:]*: //p;q;}" CHANGELOG.md)
+          if [ -n "$HEADLINE" ]; then
+            echo "title=v${VERSION}: ${HEADLINE}" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::No headline in the [${VERSION}] heading; the release will be titled v${VERSION}"
+            echo "title=v${VERSION}" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          name: ${{ steps.changelog.outputs.title }}
           body_path: release-notes.md
           draft: false
           prerelease: ${{ contains(github.ref, '-') }}

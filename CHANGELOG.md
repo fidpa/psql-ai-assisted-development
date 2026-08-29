@@ -5,6 +5,73 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.3] - 2026-08-30: The dashboard names every weekday, and the README states its limits
+
+A documentation pass over `README.md` and `CLAUDE.md` against the portfolio's
+README quality standards, plus the one code defect the pass turned up. Every
+claim in the README was traced to the file that backs it; three did not hold and
+are corrected below. No view definition, business rule or threshold changed.
+
+### Fixed
+
+- **`vw_kpi_dashboard_gesamt` names Monday and Friday again.** The `wochentag`
+  column matched `EXTRACT(ISODOW FROM CURRENT_DATE)` against `WHEN 10` and
+  `WHEN 20`. `ISODOW` returns 1 to 7, so neither branch could ever be taken and
+  the column came back `NULL` on those two days. The branches now read `WHEN 1`
+  and `WHEN 5`; the other five were already correct, and no other column of the
+  view is affected.
+
+### Changed
+
+- **Three README claims did not survive the check against the code.** The
+  retention window is not configurable: `INTERVAL '180 days'` is written out at
+  six call sites in `sql/views/02_fact/vw_fact_expiry_calculation.sql`, and the
+  README now says so instead of promising a default that can be overridden. The
+  dashboard view is 101 lines, not the "~80" the README claimed, so the line
+  count is gone rather than corrected. And the holiday set in
+  `sql/views/01_dim/vw_dim_working_days.sql` is German, six fixed dates and four
+  derived from Easter, which the README now names instead of calling the view
+  "easily adaptable to other regions".
+- **The link and file counts are gone from `README.md` and `CLAUDE.md`.** Both
+  stated "371 links across the 44 documentation files" next to
+  `scripts/validate-all-areas.sh`. The figure was correct on the day it was
+  written and drifts with every documentation commit; the script prints what it
+  checked when it runs. `CLAUDE.md` keeps the counts that do not drift, and they
+  were measured for this release: five Diátaxis areas carry a
+  `validate-links.sh`, `lib/README.md` states five rules, and the retention
+  interval has six call sites.
+- **The README states what the repository is not.** A section after the feature
+  list collects the limits that were previously scattered or absent: it ships no
+  source tables and no sample data, so only the schema file and the standalone
+  functions apply to an empty database; the refresh procedure behind
+  `fact_expiry_mat` is not shipped; the figures that motivated these patterns
+  (the 65 million row `appointment` table, the sub-second dashboard) describe the
+  source system and cannot be reproduced from this clone; and the holiday logic,
+  KPI codes and German column names carry the origin with them.
+- **The project-status table is gone.** Six phases, six green checkmarks, no
+  information. It is replaced by a paragraph naming what still moves
+  (documentation and the operational scripts) and what does not (the SQL layer).
+  The `Status` badge still anchors to that heading.
+- **The README prose was rewritten where it read like a generated template.**
+  The `**The Problem**:` scaffold is gone; the "What you can learn from this
+  repo" list was restating six of the nine feature bullets and has been dissolved
+  into them, with its migration mechanics moved next to the SQL extract; and 34
+  em dashes, 18 typographic ellipses and the `©` sign are ASCII now, leaving the
+  acute in "Diátaxis" as the only non-ASCII character in the file. `deploy.sh`
+  gained the positional signature from its own header.
+
+### Upgrade notes
+
+- **Re-create `vw_kpi_dashboard_gesamt`** from
+  `sql/views/03_kpi/vw_kpi_dashboard.sql` to pick up the weekday fix. Nothing
+  else needs re-creating and `fact_expiry_mat` does not need re-materialising:
+  the fix touches one metadata column, not a KPI value.
+- **Reports that filtered or grouped on `wochentag` will see two more groups.**
+  Rows produced on a Monday or Friday before this release carry `NULL` there.
+  Historical KPI numbers are unchanged; only the label they were filed under is.
+- **`vw_kpi_dashboard_gesamt` is a one-row view over `CURRENT_DATE`**, so there
+  is nothing to backfill unless a downstream table archived the `NULL` labels.
+
 ## [0.2.2] - 2026-08-28: GitHub identifies the project as MIT-licensed
 
 ### Changed
@@ -180,6 +247,7 @@ Initial public release.
 - `sql/procedures/` is intentionally empty, because refresh and health-check procedures were considered too environment-specific to generalise. See [`sql/procedures/README.md`](sql/procedures/README.md) for portable re-implementation hints.
 - The retention window is parameterised (default 180 days), not a domain-specific deadline.
 
+[0.2.3]: https://github.com/fidpa/psql-ai-assisted-development/releases/tag/v0.2.3
 [0.2.2]: https://github.com/fidpa/psql-ai-assisted-development/releases/tag/v0.2.2
 [0.2.1]: https://github.com/fidpa/psql-ai-assisted-development/releases/tag/v0.2.1
 [0.2.0]: https://github.com/fidpa/psql-ai-assisted-development/releases/tag/v0.2.0

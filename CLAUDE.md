@@ -62,9 +62,10 @@ bash scripts/backup-postgres.sh
 # Cache-hit-ratio and pg_stat_statements snapshot
 bash scripts/monitor-postgres-performance.sh
 
-# Documentation link validation across the five Diátaxis areas (371 links in
-# 44 files, anchors included). Run this after touching any documentation link
-# or heading — a heading rename silently breaks every anchor pointing at it.
+# Documentation link validation across the five Diátaxis areas, anchors
+# included. It prints the file and link counts it checked. Run this after
+# touching any documentation link or heading — a heading rename silently
+# breaks every anchor pointing at it.
 bash scripts/validate-all-areas.sh
 
 # Library and validator test suite. No PostgreSQL, no root, no MTA required.
@@ -203,4 +204,4 @@ Items not already covered under *First-stop documents* or *Thematic entry points
 
 ---
 
-*Maintainer: [@fidpa](https://github.com/fidpa) — last reviewed 2026-05-14.*
+*Maintainer: [@fidpa](https://github.com/fidpa) — last reviewed 2026-08-30.*

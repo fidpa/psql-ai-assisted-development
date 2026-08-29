@@ -46,11 +46,11 @@ SELECT
     -- Metadaten
     CURRENT_DATE AS datum,
     CASE EXTRACT(ISODOW FROM CURRENT_DATE)
-        WHEN 10 THEN 'Montag'
+        WHEN 1 THEN 'Montag'
         WHEN 2 THEN 'Dienstag'
         WHEN 3 THEN 'Mittwoch'
         WHEN 4 THEN 'Donnerstag'
-        WHEN 20 THEN 'Freitag'
+        WHEN 5 THEN 'Freitag'
         WHEN 6 THEN 'Samstag'
         WHEN 7 THEN 'Sonntag'
     END AS wochentag,
